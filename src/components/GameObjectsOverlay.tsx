@@ -20,6 +20,8 @@ type LabelPlacement = {
   id: string;
   x: number;
   y: number;
+  anchorX: number;
+  anchorY: number;
   text: string;
   color: string;
 };
@@ -61,11 +63,19 @@ function placeLabel(
 ): { x: number; y: number } {
   const estTextWidth = Math.max(28, text.length * 6.2);
   const half = estTextWidth / 2;
-  const candidates = [-12, 14, -22, 24, -32, 34];
+  const baseDx = anchorX >= width / 2 ? -10 : 10;
+  const candidates: ReadonlyArray<Readonly<{ dx: number; dy: number }>> = [
+    { dx: baseDx, dy: -12 },
+    { dx: baseDx, dy: 14 },
+    { dx: baseDx * 1.4, dy: -22 },
+    { dx: baseDx * 1.4, dy: 24 },
+    { dx: baseDx * 1.9, dy: -30 },
+    { dx: baseDx * 1.9, dy: 34 },
+  ];
 
-  for (const dy of candidates) {
-    const y = anchorY + dy;
-    const x = Math.min(width - half - 2, Math.max(half + 2, anchorX));
+  for (const candidate of candidates) {
+    const x = Math.min(width - half - 2, Math.max(half + 2, anchorX + candidate.dx));
+    const y = anchorY + candidate.dy;
     const box: LabelBox = {
       left: x - half,
       right: x + half,
@@ -81,7 +91,7 @@ function placeLabel(
     }
   }
 
-  const fallbackX = Math.min(width - half - 2, Math.max(half + 2, anchorX));
+  const fallbackX = Math.min(width - half - 2, Math.max(half + 2, anchorX + baseDx));
   const fallbackY = Math.min(height - 6, Math.max(10, anchorY - 12));
   placed.push({
     left: fallbackX - half,
@@ -115,6 +125,8 @@ export default function GameObjectsOverlay({
       id: 'start',
       x: placed.x,
       y: placed.y,
+      anchorX: startCanvas.x,
+      anchorY: startCanvas.y,
       text: formatVec2(startPoint),
       color: '#16a34a',
     });
@@ -126,6 +138,8 @@ export default function GameObjectsOverlay({
       id: 'goal',
       x: placed.x,
       y: placed.y,
+      anchorX: goalCanvas.x,
+      anchorY: goalCanvas.y,
       text: formatVec2(goal),
       color: '#dc2626',
     });
@@ -139,6 +153,8 @@ export default function GameObjectsOverlay({
       id: `star-${star.id}`,
       x: placed.x,
       y: placed.y,
+      anchorX: p.x,
+      anchorY: p.y,
       text,
       color: '#ca8a04',
     });
@@ -183,21 +199,31 @@ export default function GameObjectsOverlay({
       })}
 
       {labelPlacements.map((label) => (
-        <text
-          key={label.id}
-          x={label.x}
-          y={label.y}
-          textAnchor="middle"
-          dominantBaseline="middle"
-          fill={label.color}
-          fontSize={11}
-          fontWeight={600}
-          stroke="rgba(255,255,255,0.9)"
-          strokeWidth={2.5}
-          paintOrder="stroke"
-        >
-          {label.text}
-        </text>
+        <g key={label.id}>
+          <line
+            x1={label.anchorX}
+            y1={label.anchorY}
+            x2={label.x}
+            y2={label.y + (label.y < label.anchorY ? 5 : -5)}
+            stroke={label.color}
+            strokeOpacity={0.6}
+            strokeWidth={1.2}
+          />
+          <text
+            x={label.x}
+            y={label.y}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            fill={label.color}
+            fontSize={11}
+            fontWeight={600}
+            stroke="rgba(255,255,255,0.9)"
+            strokeWidth={2.5}
+            paintOrder="stroke"
+          >
+            {label.text}
+          </text>
+        </g>
       ))}
     </svg>
   );
