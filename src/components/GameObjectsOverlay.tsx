@@ -1,10 +1,5 @@
 import type { Vec2 } from '../types';
-import {
-  findClosestPointIndexByX,
-  offsetWorldPointByNormal,
-  tangentFromPointsAtIndex,
-  worldToCanvas,
-} from '../utils/curveGeometry';
+import { worldToCanvas } from '../utils/curveGeometry';
 
 export type GameStar = Readonly<{
   id: string;
@@ -19,21 +14,7 @@ export type GameObjectsOverlayProps = {
   goal?: Vec2;
   stars?: ReadonlyArray<GameStar>;
   collectedStars?: ReadonlySet<string>;
-  curvePoints?: ReadonlyArray<Vec2>;
-  objectRadiusPx?: number;
 };
-
-function offsetPointOnCurve(
-  point: Vec2,
-  curvePoints: ReadonlyArray<Vec2> | undefined,
-  objectRadiusPx: number,
-  scale: number
-): Vec2 {
-  if (!curvePoints || curvePoints.length < 2) return point;
-  const index = findClosestPointIndexByX(curvePoints, point.x);
-  const tangent = tangentFromPointsAtIndex(curvePoints, index);
-  return offsetWorldPointByNormal(point, tangent, objectRadiusPx, scale);
-}
 
 export default function GameObjectsOverlay({
   width,
@@ -43,15 +24,11 @@ export default function GameObjectsOverlay({
   goal,
   stars = [],
   collectedStars,
-  curvePoints,
-  objectRadiusPx = 6,
 }: GameObjectsOverlayProps) {
   const visibleStars = stars.filter((star) => !collectedStars?.has(star.id));
 
-  const startWorld = startPoint ? offsetPointOnCurve(startPoint, curvePoints, objectRadiusPx, scale) : undefined;
-  const goalWorld = goal ? offsetPointOnCurve(goal, curvePoints, objectRadiusPx, scale) : undefined;
-  const startCanvas = startWorld ? worldToCanvas(startWorld, width, height, scale) : undefined;
-  const goalCanvas = goalWorld ? worldToCanvas(goalWorld, width, height, scale) : undefined;
+  const startCanvas = startPoint ? worldToCanvas(startPoint, width, height, scale) : undefined;
+  const goalCanvas = goal ? worldToCanvas(goal, width, height, scale) : undefined;
 
   return (
     <svg
@@ -82,8 +59,7 @@ export default function GameObjectsOverlay({
       ) : null}
 
       {visibleStars.map((star) => {
-        const world = offsetPointOnCurve(star.position, curvePoints, objectRadiusPx, scale);
-        const p = worldToCanvas(world, width, height, scale);
+        const p = worldToCanvas(star.position, width, height, scale);
         return (
           <g key={star.id}>
             <circle cx={p.x} cy={p.y} r={5} fill="#facc15" stroke="#a16207" strokeWidth={1.5} />
