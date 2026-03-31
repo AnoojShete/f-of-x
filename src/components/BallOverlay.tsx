@@ -10,6 +10,8 @@ export type BallOverlayProps = {
   scale: number;
   segments: ReadonlyArray<GraphSegment>;
   startPoint?: Vec2;
+  isPlaying?: boolean;
+  resetToken?: number;
 
   /** Ball radius in pixels */
   radiusPx?: number;
@@ -211,6 +213,8 @@ export default function BallOverlay({
   scale,
   segments,
   startPoint,
+  isPlaying = true,
+  resetToken = 0,
   radiusPx = 6,
   speedPxPerSec = 220,
   fillStyle = '#ff2d55',
@@ -247,7 +251,7 @@ export default function BallOverlay({
     rotationRef.current = 0;
     lastTimeRef.current = undefined;
     onCollectedStarsChange?.([]);
-  }, [path, startPoint, onCollectedStarsChange]);
+  }, [path, startPoint, onCollectedStarsChange, resetToken]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -281,7 +285,7 @@ export default function BallOverlay({
       let distance = clamp(distanceRef.current, 0, path.totalLength);
       let velocity = Number.isFinite(velocityRef.current) ? velocityRef.current : 0;
 
-      if (dt > 0) {
+      if (isPlaying && dt > 0) {
         const tangent = getTangentFromNeighbors(path, distance);
         const projectedGravity = 0 * tangent.x + -1 * tangent.y;
         const acceleration = projectedGravity * GRAVITY_ALONG_PATH_PX_PER_SEC2;
@@ -335,12 +339,12 @@ export default function BallOverlay({
       };
 
       // Collision logic (pure + modular): goal + star collection.
-      if (goal && !goalReachedRef.current && checkGoalCollision(ballWorld, goal, goalThreshold)) {
+      if (isPlaying && goal && !goalReachedRef.current && checkGoalCollision(ballWorld, goal, goalThreshold)) {
         goalReachedRef.current = true;
         onGoalReached?.();
       }
 
-      if (stars.length > 0) {
+      if (isPlaying && stars.length > 0) {
         const collected = collectedStarsRef.current;
         const { newlyCollectedIds } = collectStars(ballWorld, stars, collected, starThreshold);
         if (newlyCollectedIds.length > 0) {
@@ -394,15 +398,23 @@ export default function BallOverlay({
         ctx.restore();
       }
 
-      rafId = requestAnimationFrame(tick);
+      if (isPlaying) {
+        rafId = requestAnimationFrame(tick);
+      }
     };
 
-    rafId = requestAnimationFrame(tick);
+    if (isPlaying) {
+      rafId = requestAnimationFrame(tick);
+    } else {
+      tick(performance.now());
+    }
+
     return () => cancelAnimationFrame(rafId);
   }, [
     width,
     height,
     path,
+    isPlaying,
     radiusPx,
     speedPxPerSec,
     fillStyle,
