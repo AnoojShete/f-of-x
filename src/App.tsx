@@ -5,34 +5,22 @@ import BallOverlay from './components/BallOverlay';
 import GameObjectsOverlay from './components/GameObjectsOverlay';
 import type { GameStar } from './components/GameObjectsOverlay';
 import { compileExpression } from './utils/evaluate';
+import { generateLevel } from './utils/levelGenerator';
+import type { LevelType } from './utils/levelGenerator';
 import { sampleCompiledFunction } from './utils/sample';
-import type { Vec2 } from './types';
 import type { GraphFunction } from './types';
 import type { GraphPlot } from './types';
 
 const CANVAS_WIDTH = 900;
 const CANVAS_HEIGHT = 520;
 const BALL_RADIUS_PX = 6;
+const ACTIVE_LEVEL_TYPE: LevelType = 'sine';
 
 type GameState = 'idle' | 'playing' | 'won';
-type LevelConfig = {
-  start: Vec2;
-  goal: Vec2;
-  stars: ReadonlyArray<Vec2>;
-};
-
-const LEVEL: LevelConfig = {
-  start: { x: -5, y: 0 },
-  goal: { x: 5, y: 1.5 },
-  stars: [
-    { x: -2.5, y: 1.8 },
-    { x: 0, y: 2.2 },
-    { x: 2.5, y: 1.4 },
-  ],
-};
 
 export default function App() {
-  const [expression, setExpression] = useState<string>('sin(x)');
+  const level = useMemo(() => generateLevel(ACTIVE_LEVEL_TYPE), []);
+  const [expression, setExpression] = useState<string>(level.solution);
   const [scale, setScale] = useState<number>(60); // pixels per unit
   const [collectedStarIds, setCollectedStarIds] = useState<ReadonlyArray<string>>([]);
   const [gameState, setGameState] = useState<GameState>('idle');
@@ -74,12 +62,12 @@ export default function App() {
     });
   }, [functions, scale]);
 
-  const startPoint = LEVEL.start;
-  const goal = LEVEL.goal;
+  const startPoint = level.start;
+  const goal = level.goal;
 
   const stars = useMemo<GameStar[]>(
-    () => LEVEL.stars.map((position, index) => ({ id: `star-${index + 1}`, position })),
-    []
+    () => level.stars.map((position, index) => ({ id: `star-${index + 1}`, position })),
+    [level]
   );
 
   const collisionStars = useMemo(
@@ -88,6 +76,8 @@ export default function App() {
   );
 
   const collectedStarSet = useMemo(() => new Set(collectedStarIds), [collectedStarIds]);
+  const allStarsCollected = stars.length > 0 && collectedStarIds.length >= stars.length;
+  const goalForCollision = allStarsCollected ? goal : undefined;
 
   const startGame = useCallback(() => {
     setCollectedStarIds([]);
@@ -193,10 +183,10 @@ export default function App() {
           resetToken={resetToken}
           radiusPx={BALL_RADIUS_PX}
           startPoint={startPoint}
-          goal={goal}
           stars={collisionStars}
           onGoalReached={handleGoalReached}
           onCollectedStarsChange={setCollectedStarIds}
+          {...(goalForCollision ? { goal: goalForCollision } : {})}
         />
       </Graph>
 

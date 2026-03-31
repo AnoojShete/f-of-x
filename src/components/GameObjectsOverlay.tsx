@@ -16,6 +16,82 @@ export type GameObjectsOverlayProps = {
   collectedStars?: ReadonlySet<string>;
 };
 
+type LabelPlacement = {
+  id: string;
+  x: number;
+  y: number;
+  text: string;
+  color: string;
+};
+
+type LabelBox = {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+};
+
+function approxEqual(a: number, b: number, eps = 1e-6): boolean {
+  return Math.abs(a - b) <= eps;
+}
+
+function formatCoordValue(value: number): string {
+  if (approxEqual(value, Math.PI)) return 'pi';
+  if (approxEqual(value, -Math.PI)) return '-pi';
+  if (approxEqual(value, Math.PI / 2)) return 'pi/2';
+  if (approxEqual(value, -Math.PI / 2)) return '-pi/2';
+  return (Math.round(value * 100) / 100).toFixed(2);
+}
+
+function formatVec2(p: Vec2): string {
+  return `(${formatCoordValue(p.x)}, ${formatCoordValue(p.y)})`;
+}
+
+function boxesOverlap(a: LabelBox, b: LabelBox): boolean {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+function placeLabel(
+  anchorX: number,
+  anchorY: number,
+  text: string,
+  width: number,
+  height: number,
+  placed: LabelBox[]
+): { x: number; y: number } {
+  const estTextWidth = Math.max(28, text.length * 6.2);
+  const half = estTextWidth / 2;
+  const candidates = [-12, 14, -22, 24, -32, 34];
+
+  for (const dy of candidates) {
+    const y = anchorY + dy;
+    const x = Math.min(width - half - 2, Math.max(half + 2, anchorX));
+    const box: LabelBox = {
+      left: x - half,
+      right: x + half,
+      top: y - 8,
+      bottom: y + 4,
+    };
+
+    const inBounds = box.top >= 0 && box.bottom <= height;
+    const hasOverlap = placed.some((b) => boxesOverlap(b, box));
+    if (inBounds && !hasOverlap) {
+      placed.push(box);
+      return { x, y };
+    }
+  }
+
+  const fallbackX = Math.min(width - half - 2, Math.max(half + 2, anchorX));
+  const fallbackY = Math.min(height - 6, Math.max(10, anchorY - 12));
+  placed.push({
+    left: fallbackX - half,
+    right: fallbackX + half,
+    top: fallbackY - 8,
+    bottom: fallbackY + 4,
+  });
+  return { x: fallbackX, y: fallbackY };
+}
+
 export default function GameObjectsOverlay({
   width,
   height,
@@ -29,6 +105,44 @@ export default function GameObjectsOverlay({
 
   const startCanvas = startPoint ? worldToCanvas(startPoint, width, height, scale) : undefined;
   const goalCanvas = goal ? worldToCanvas(goal, width, height, scale) : undefined;
+
+  const labelPlacements: LabelPlacement[] = [];
+  const placedBoxes: LabelBox[] = [];
+
+  if (startPoint && startCanvas) {
+    const placed = placeLabel(startCanvas.x, startCanvas.y, formatVec2(startPoint), width, height, placedBoxes);
+    labelPlacements.push({
+      id: 'start',
+      x: placed.x,
+      y: placed.y,
+      text: formatVec2(startPoint),
+      color: '#16a34a',
+    });
+  }
+
+  if (goal && goalCanvas) {
+    const placed = placeLabel(goalCanvas.x, goalCanvas.y, formatVec2(goal), width, height, placedBoxes);
+    labelPlacements.push({
+      id: 'goal',
+      x: placed.x,
+      y: placed.y,
+      text: formatVec2(goal),
+      color: '#dc2626',
+    });
+  }
+
+  for (const star of visibleStars) {
+    const p = worldToCanvas(star.position, width, height, scale);
+    const text = formatVec2(star.position);
+    const placed = placeLabel(p.x, p.y, text, width, height, placedBoxes);
+    labelPlacements.push({
+      id: `star-${star.id}`,
+      x: placed.x,
+      y: placed.y,
+      text,
+      color: '#ca8a04',
+    });
+  }
 
   return (
     <svg
@@ -67,6 +181,24 @@ export default function GameObjectsOverlay({
           </g>
         );
       })}
+
+      {labelPlacements.map((label) => (
+        <text
+          key={label.id}
+          x={label.x}
+          y={label.y}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          fill={label.color}
+          fontSize={11}
+          fontWeight={600}
+          stroke="rgba(255,255,255,0.9)"
+          strokeWidth={2.5}
+          paintOrder="stroke"
+        >
+          {label.text}
+        </text>
+      ))}
     </svg>
   );
 }
