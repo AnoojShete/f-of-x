@@ -12,44 +12,24 @@ import type { GraphPlot } from './types';
 
 const CANVAS_WIDTH = 900;
 const CANVAS_HEIGHT = 520;
-const START_X = -5;
-const GOAL_X = 5;
-const STAR_XS = [-2.5, 0, 2.5] as const;
 const BALL_RADIUS_PX = 6;
 
 type GameState = 'idle' | 'playing' | 'won';
+type LevelConfig = {
+  start: Vec2;
+  goal: Vec2;
+  stars: ReadonlyArray<Vec2>;
+};
 
-function findPointClosestToX(plots: ReadonlyArray<GraphPlot>, x: number): Vec2 | undefined {
-  const primary = plots[0];
-  if (!primary || primary.error) return undefined;
-
-  let best: Vec2 | undefined;
-  let bestAbsDx = Number.POSITIVE_INFINITY;
-
-  for (const segment of primary.segments) {
-    for (const p of segment) {
-      const dx = Math.abs(p.x - x);
-      if (dx < bestAbsDx) {
-        bestAbsDx = dx;
-        best = p;
-      }
-    }
-  }
-
-  return best;
-}
-
-function findPrimarySegmentPoints(plots: ReadonlyArray<GraphPlot>): ReadonlyArray<Vec2> {
-  const primary = plots[0];
-  if (!primary || primary.error) return [];
-
-  let best: ReadonlyArray<Vec2> = [];
-  for (const segment of primary.segments) {
-    if (segment.length > best.length) best = segment;
-  }
-
-  return best;
-}
+const LEVEL: LevelConfig = {
+  start: { x: -5, y: 0 },
+  goal: { x: 5, y: 1.5 },
+  stars: [
+    { x: -2.5, y: 1.8 },
+    { x: 0, y: 2.2 },
+    { x: 2.5, y: 1.4 },
+  ],
+};
 
 export default function App() {
   const [expression, setExpression] = useState<string>('sin(x)');
@@ -94,23 +74,13 @@ export default function App() {
     });
   }, [functions, scale]);
 
-  const startPoint = useMemo(() => findPointClosestToX(plots, START_X), [plots]);
-  const goal = useMemo(() => findPointClosestToX(plots, GOAL_X), [plots]);
-  const primaryCurvePoints = useMemo(() => findPrimarySegmentPoints(plots), [plots]);
+  const startPoint = LEVEL.start;
+  const goal = LEVEL.goal;
 
-  const stars = useMemo<GameStar[]>(() => {
-    const built: GameStar[] = [];
-    STAR_XS.forEach((x, index) => {
-      const point = findPointClosestToX(plots, x);
-      if (point) {
-        built.push({
-          id: `star-${index + 1}`,
-          position: point,
-        });
-      }
-    });
-    return built;
-  }, [plots]);
+  const stars = useMemo<GameStar[]>(
+    () => LEVEL.stars.map((position, index) => ({ id: `star-${index + 1}`, position })),
+    []
+  );
 
   const collisionStars = useMemo(
     () => stars.map((s) => ({ id: s.id, x: s.position.x, y: s.position.y })),
@@ -213,8 +183,6 @@ export default function App() {
           goal={goal}
           stars={stars}
           collectedStars={collectedStarSet}
-          curvePoints={primaryCurvePoints}
-          objectRadiusPx={BALL_RADIUS_PX}
         />
         <BallOverlay
           width={CANVAS_WIDTH}
