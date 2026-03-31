@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import type { GraphSegment, Vec2 } from '../types';
 import { checkGoalCollision, collectStars } from '../utils/collision';
 import type { Star } from '../utils/collision';
+import { offsetWorldPointByNormal, upwardNormalFromTangent, worldToCanvas } from '../utils/curveGeometry';
 
 export type BallOverlayProps = {
   width: number;
@@ -39,6 +40,9 @@ export type BallOverlayProps = {
 
   /** Emits the full collected set (ids) when it changes. */
   onCollectedStarsChange?: (collectedIds: ReadonlyArray<string>) => void;
+
+  /** Optional temporary debug vectors for tangent/normal at ball position. */
+  debugVectors?: boolean;
 };
 
 type PathSample = {
@@ -54,13 +58,6 @@ const FRICTION_PER_SEC = 0.7;
 const INITIAL_DISTANCE_PX = 14;
 const INITIAL_IMPULSE_PX_PER_SEC = 100;
 const STATIC_VELOCITY_EPSILON = 0.01;
-
-function worldToCanvas(p: Vec2, width: number, height: number, scale: number): Vec2 {
-  return {
-    x: width / 2 + p.x * scale,
-    y: height / 2 - p.y * scale,
-  };
-}
 
 function buildPath(segments: ReadonlyArray<GraphSegment>, width: number, height: number, scale: number): PathSample | undefined {
   // Prefer the longest continuous segment to avoid jumping across discontinuities.
@@ -224,6 +221,7 @@ export default function BallOverlay({
   onGoalReached,
   onStarCollected,
   onCollectedStarsChange,
+  debugVectors = false,
 }: BallOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const collectedStarsRef = useRef<Set<string>>(new Set());
@@ -231,6 +229,8 @@ export default function BallOverlay({
   const velocityRef = useRef<number>(INITIAL_IMPULSE_PX_PER_SEC);
   const distanceRef = useRef<number>(INITIAL_DISTANCE_PX);
   const lastTimeRef = useRef<number | undefined>(undefined);
+  const previousDistanceRef = useRef<number>(INITIAL_DISTANCE_PX);
+  const rotationRef = useRef<number>(0);
 
   const path = useMemo(() => buildPath(segments, width, height, scale), [segments, width, height, scale]);
 
@@ -242,7 +242,9 @@ export default function BallOverlay({
       ? (startPoint ? findClosestDistanceByX(path, startPoint.x) : clampInitialDistance(path))
       : INITIAL_DISTANCE_PX;
     distanceRef.current = startDistance;
+    previousDistanceRef.current = startDistance;
     velocityRef.current = path ? computeInitialVelocity(path, startDistance) : INITIAL_IMPULSE_PX_PER_SEC;
+    rotationRef.current = 0;
     lastTimeRef.current = undefined;
     onCollectedStarsChange?.([]);
   }, [path, startPoint, onCollectedStarsChange]);
@@ -303,9 +305,14 @@ export default function BallOverlay({
       velocityRef.current = velocity;
       distanceRef.current = distance;
 
+      const previousDistance = previousDistanceRef.current;
+      const distanceDelta = distance - previousDistance;
+      previousDistanceRef.current = distance;
+      if (radiusPx > 1e-6 && Number.isFinite(distanceDelta)) {
+        rotationRef.current += distanceDelta / radiusPx;
+      }
+
       const i = ensureNonDegenerateSegmentIndex(path, findSegmentIndex(path.cumulative, distance));
-      const aCanvas = path.canvasPoints[i]!;
-      const bCanvas = path.canvasPoints[Math.min(i + 1, path.canvasPoints.length - 1)]!;
       const aWorld = path.worldPoints[i]!;
       const bWorld = path.worldPoints[Math.min(i + 1, path.worldPoints.length - 1)]!;
       const d0 = path.cumulative[i]!;
@@ -315,33 +322,16 @@ export default function BallOverlay({
       const t = span > 0 ? clamp((distance - d0) / span, 0, 1) : 0;
 
       const tangent = getTangentFromNeighbors(path, distance);
-      const tangentCanvasX = tangent.x;
-      const tangentCanvasY = -tangent.y;
-      const tangentCanvasLength = Math.hypot(tangentCanvasX, tangentCanvasY);
-
-      let normalX = 0;
-      let normalY = -1;
-      if (tangentCanvasLength > 1e-8 && Number.isFinite(tangentCanvasLength)) {
-        const tx = tangentCanvasX / tangentCanvasLength;
-        const ty = tangentCanvasY / tangentCanvasLength;
-        normalX = -ty;
-        normalY = tx;
-      }
-
-      // Keep the rendered ball above the curve in screen space (up is negative canvas Y).
-      if (normalY > 0) {
-        normalX = -normalX;
-        normalY = -normalY;
-      }
-
-      const xOnCurve = lerp(aCanvas.x, bCanvas.x, t);
-      const yOnCurve = lerp(aCanvas.y, bCanvas.y, t);
-      const x = xOnCurve + normalX * radiusPx;
-      const y = yOnCurve + normalY * radiusPx;
-
-      const ballWorld: Vec2 = {
+      const ballWorldOnCurve: Vec2 = {
         x: lerp(aWorld.x, bWorld.x, t),
         y: lerp(aWorld.y, bWorld.y, t),
+      };
+      const ballWorldOffset = offsetWorldPointByNormal(ballWorldOnCurve, tangent, radiusPx, scale);
+      const { x, y } = worldToCanvas(ballWorldOffset, width, height, scale);
+
+      const ballWorld: Vec2 = {
+        x: ballWorldOnCurve.x,
+        y: ballWorldOnCurve.y,
       };
 
       // Collision logic (pure + modular): goal + star collection.
@@ -364,11 +354,45 @@ export default function BallOverlay({
 
       ctx.clearRect(0, 0, width, height);
       ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(rotationRef.current);
+
       ctx.fillStyle = fillStyle;
       ctx.beginPath();
-      ctx.arc(x, y, radiusPx, 0, Math.PI * 2);
+      ctx.arc(0, 0, radiusPx, 0, Math.PI * 2);
       ctx.fill();
+
+      // Visual cue so rotation is perceptible.
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(radiusPx * 0.85, 0);
+      ctx.stroke();
       ctx.restore();
+
+      if (debugVectors) {
+        const centerCanvas = worldToCanvas(ballWorldOnCurve, width, height, scale);
+        const tangentCanvas = { x: tangent.x, y: -tangent.y };
+        const normalWorld = upwardNormalFromTangent(tangent);
+        const normalCanvas = { x: normalWorld.x, y: -normalWorld.y };
+
+        ctx.save();
+        ctx.lineWidth = 2;
+
+        ctx.strokeStyle = 'rgba(37, 99, 235, 0.8)';
+        ctx.beginPath();
+        ctx.moveTo(centerCanvas.x, centerCanvas.y);
+        ctx.lineTo(centerCanvas.x + tangentCanvas.x * 20, centerCanvas.y + tangentCanvas.y * 20);
+        ctx.stroke();
+
+        ctx.strokeStyle = 'rgba(22, 163, 74, 0.85)';
+        ctx.beginPath();
+        ctx.moveTo(centerCanvas.x, centerCanvas.y);
+        ctx.lineTo(centerCanvas.x + normalCanvas.x * 20, centerCanvas.y + normalCanvas.y * 20);
+        ctx.stroke();
+        ctx.restore();
+      }
 
       rafId = requestAnimationFrame(tick);
     };
@@ -389,6 +413,7 @@ export default function BallOverlay({
     onGoalReached,
     onStarCollected,
     onCollectedStarsChange,
+    debugVectors,
   ]);
 
   return (

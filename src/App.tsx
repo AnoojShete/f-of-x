@@ -15,6 +15,7 @@ const CANVAS_HEIGHT = 520;
 const START_X = -5;
 const GOAL_X = 5;
 const STAR_XS = [-2.5, 0, 2.5] as const;
+const BALL_RADIUS_PX = 6;
 
 function findPointClosestToX(plots: ReadonlyArray<GraphPlot>, x: number): Vec2 | undefined {
   const primary = plots[0];
@@ -31,6 +32,18 @@ function findPointClosestToX(plots: ReadonlyArray<GraphPlot>, x: number): Vec2 |
         best = p;
       }
     }
+  }
+
+  return best;
+}
+
+function findPrimarySegmentPoints(plots: ReadonlyArray<GraphPlot>): ReadonlyArray<Vec2> {
+  const primary = plots[0];
+  if (!primary || primary.error) return [];
+
+  let best: ReadonlyArray<Vec2> = [];
+  for (const segment of primary.segments) {
+    if (segment.length > best.length) best = segment;
   }
 
   return best;
@@ -79,6 +92,7 @@ export default function App() {
 
   const startPoint = useMemo(() => findPointClosestToX(plots, START_X), [plots]);
   const goal = useMemo(() => findPointClosestToX(plots, GOAL_X), [plots]);
+  const primaryCurvePoints = useMemo(() => findPrimarySegmentPoints(plots), [plots]);
 
   const stars = useMemo<GameStar[]>(() => {
     const built: GameStar[] = [];
@@ -144,12 +158,15 @@ export default function App() {
           goal={goal}
           stars={stars}
           collectedStars={collectedStarSet}
+          curvePoints={primaryCurvePoints}
+          objectRadiusPx={BALL_RADIUS_PX}
         />
         <BallOverlay
           width={CANVAS_WIDTH}
           height={CANVAS_HEIGHT}
           scale={scale}
           segments={plots[0]?.error ? [] : (plots[0]?.segments ?? [])}
+          radiusPx={BALL_RADIUS_PX}
           startPoint={startPoint}
           goal={goal}
           stars={collisionStars}
