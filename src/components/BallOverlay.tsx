@@ -8,6 +8,7 @@ export type BallOverlayProps = {
   height: number;
   scale: number;
   segments: ReadonlyArray<GraphSegment>;
+  startPoint?: Vec2;
 
   /** Ball radius in pixels */
   radiusPx?: number;
@@ -124,6 +125,25 @@ function clampInitialDistance(path: PathSample): number {
   return clamp(INITIAL_DISTANCE_PX, 0, path.totalLength);
 }
 
+function findClosestDistanceByX(path: PathSample, targetX: number): number {
+  if (!Number.isFinite(targetX) || path.worldPoints.length === 0) {
+    return clampInitialDistance(path);
+  }
+
+  let bestIndex = 0;
+  let bestAbsDx = Number.POSITIVE_INFINITY;
+
+  for (let i = 0; i < path.worldPoints.length; i++) {
+    const dx = Math.abs(path.worldPoints[i]!.x - targetX);
+    if (dx < bestAbsDx) {
+      bestAbsDx = dx;
+      bestIndex = i;
+    }
+  }
+
+  return clamp(path.cumulative[bestIndex] ?? 0, 0, path.totalLength);
+}
+
 function computeInitialVelocity(path: PathSample, distance: number): number {
   const tangent = getTangentFromNeighbors(path, distance);
   const tangentMagnitude = Math.hypot(tangent.x, tangent.y);
@@ -193,6 +213,7 @@ export default function BallOverlay({
   height,
   scale,
   segments,
+  startPoint,
   radiusPx = 6,
   speedPxPerSec = 220,
   fillStyle = '#ff2d55',
@@ -217,12 +238,14 @@ export default function BallOverlay({
   useEffect(() => {
     collectedStarsRef.current = new Set();
     goalReachedRef.current = false;
-    const startDistance = path ? clampInitialDistance(path) : INITIAL_DISTANCE_PX;
+    const startDistance = path
+      ? (startPoint ? findClosestDistanceByX(path, startPoint.x) : clampInitialDistance(path))
+      : INITIAL_DISTANCE_PX;
     distanceRef.current = startDistance;
     velocityRef.current = path ? computeInitialVelocity(path, startDistance) : INITIAL_IMPULSE_PX_PER_SEC;
     lastTimeRef.current = undefined;
     onCollectedStarsChange?.([]);
-  }, [path, onCollectedStarsChange]);
+  }, [path, startPoint, onCollectedStarsChange]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
