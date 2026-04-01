@@ -15,6 +15,7 @@ export type BallOverlayProps = {
   height: number;
   scale: number;
   segments: ReadonlyArray<GraphSegment>;
+  cameraCenter?: Vec2;
   startPoint?: Vec2;
   isPlaying?: boolean;
   isPhysicsEnabled?: boolean;
@@ -61,6 +62,9 @@ export type BallOverlayProps = {
 
   /** Called when a star is collected. */
   onStarCollected?: (starId: string) => void;
+
+  /** Emits the current ball world position each frame. */
+  onBallPositionChange?: (position: Vec2) => void;
 
   /** Emits the full collected set (ids) when it changes. */
   onCollectedStarsChange?: (collectedIds: ReadonlyArray<string>) => void;
@@ -318,6 +322,7 @@ export default function BallOverlay({
   height,
   scale,
   segments,
+  cameraCenter = { x: 0, y: 0 },
   startPoint,
   isPlaying = true,
   isPhysicsEnabled = true,
@@ -336,6 +341,7 @@ export default function BallOverlay({
   onGoalReached,
   onLevelComplete,
   onStarCollected,
+  onBallPositionChange,
   onCollectedStarsChange,
   debugVectors = false,
 }: BallOverlayProps) {
@@ -524,9 +530,10 @@ export default function BallOverlay({
       const ballWorldOffset = state === 'onCurve'
         ? offsetWorldPointByNormal(ballWorld, tangentForRender, radiusPx, scale)
         : ballWorld;
-      const { x, y } = worldToCanvas(ballWorldOffset, width, height, scale);
+      const { x, y } = worldToCanvas(ballWorldOffset, width, height, scale, cameraCenter);
 
       const collisionPoint: Vec2 = { x: ballWorld.x, y: ballWorld.y };
+      onBallPositionChange?.(collisionPoint);
 
       // Collision logic (pure + modular): goal + star collection.
       if (isPlaying && goal && !goalReachedRef.current && checkGoalCollision(collisionPoint, goal, goalThreshold)) {
@@ -577,7 +584,7 @@ export default function BallOverlay({
       ctx.restore();
 
       if (debugVectors) {
-        const centerCanvas = worldToCanvas(collisionPoint, width, height, scale);
+        const centerCanvas = worldToCanvas(collisionPoint, width, height, scale, cameraCenter);
         const tangentCanvas = { x: tangentForRender.x, y: -tangentForRender.y };
         const normalWorld = upwardNormalFromTangent(tangentForRender);
         const normalCanvas = { x: normalWorld.x, y: -normalWorld.y };
@@ -626,7 +633,9 @@ export default function BallOverlay({
     onGoalReached,
     onLevelComplete,
     onStarCollected,
+    onBallPositionChange,
     onCollectedStarsChange,
+    cameraCenter,
     isPhysicsEnabled,
     gravityPxPerSec2,
     frictionPerSec,

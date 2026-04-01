@@ -1,9 +1,15 @@
 import type { Vec2 } from '../types';
 
-export function worldToCanvas(p: Vec2, width: number, height: number, scale: number): Vec2 {
+export function worldToCanvas(
+  p: Vec2,
+  width: number,
+  height: number,
+  scale: number,
+  cameraCenter: Vec2 = { x: 0, y: 0 }
+): Vec2 {
   return {
-    x: width / 2 + p.x * scale,
-    y: height / 2 - p.y * scale,
+    x: width / 2 + (p.x - cameraCenter.x) * scale,
+    y: height / 2 - (p.y - cameraCenter.y) * scale,
   };
 }
 

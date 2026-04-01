@@ -10,6 +10,7 @@ export type GameObjectsOverlayProps = {
   width: number;
   height: number;
   scale: number;
+  cameraCenter?: Vec2;
   startPoint?: Vec2;
   goal?: Vec2;
   stars?: ReadonlyArray<GameStar>;
@@ -106,6 +107,7 @@ export default function GameObjectsOverlay({
   width,
   height,
   scale,
+  cameraCenter = { x: 0, y: 0 },
   startPoint,
   goal,
   stars = [],
@@ -113,8 +115,8 @@ export default function GameObjectsOverlay({
 }: GameObjectsOverlayProps) {
   const visibleStars = stars.filter((star) => !collectedStars?.has(star.id));
 
-  const startCanvas = startPoint ? worldToCanvas(startPoint, width, height, scale) : undefined;
-  const goalCanvas = goal ? worldToCanvas(goal, width, height, scale) : undefined;
+  const startCanvas = startPoint ? worldToCanvas(startPoint, width, height, scale, cameraCenter) : undefined;
+  const goalCanvas = goal ? worldToCanvas(goal, width, height, scale, cameraCenter) : undefined;
 
   const labelPlacements: LabelPlacement[] = [];
   const placedBoxes: LabelBox[] = [];
@@ -146,7 +148,7 @@ export default function GameObjectsOverlay({
   }
 
   for (const star of visibleStars) {
-    const p = worldToCanvas(star.position, width, height, scale);
+    const p = worldToCanvas(star.position, width, height, scale, cameraCenter);
     const text = formatVec2(star.position);
     const placed = placeLabel(p.x, p.y, text, width, height, placedBoxes);
     labelPlacements.push({
@@ -189,7 +191,7 @@ export default function GameObjectsOverlay({
       ) : null}
 
       {visibleStars.map((star) => {
-        const p = worldToCanvas(star.position, width, height, scale);
+        const p = worldToCanvas(star.position, width, height, scale, cameraCenter);
         return (
           <g key={star.id}>
             <circle cx={p.x} cy={p.y} r={5} fill="#facc15" stroke="#a16207" strokeWidth={1.5} />
