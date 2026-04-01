@@ -41,7 +41,7 @@ type PhysicsSettings = {
 
 export default function App() {
   const level = useMemo(() => generateLevel(ACTIVE_LEVEL_TYPE), []);
-  const [expression, setExpression] = useState<string>(level.solution);
+  const [functionsText, setFunctionsText] = useState<string>(level.solution);
   const [scale, setScale] = useState<number>(60); // pixels per unit
   const [isPhysicsEnabled, setIsPhysicsEnabled] = useState<boolean>(true);
   const [isCameraFollowEnabled, setIsCameraFollowEnabled] = useState<boolean>(false);
@@ -75,17 +75,20 @@ export default function App() {
   const collectedIdsRef = useRef<Set<string>>(new Set());
   const goalReachedRef = useRef<boolean>(false);
 
-  const functions = useMemo<GraphFunction[]>(
-    () => [
-      {
-        id: 'f',
-        expression,
-        strokeStyle: '#0b5fff',
-        lineWidth: 2,
-      },
-    ],
-    [expression]
-  );
+  const functions = useMemo<GraphFunction[]>(() => {
+    const palette = ['#0b5fff', '#16a34a', '#ef4444', '#f59e0b', '#7c3aed', '#0891b2'];
+    const lines = functionsText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+
+    return lines.map((line, index) => ({
+      id: `f-${index + 1}`,
+      expression: line,
+      strokeStyle: palette[index % palette.length]!,
+      lineWidth: 2,
+    }));
+  }, [functionsText]);
 
   const plots = useMemo<GraphPlot[]>(() => {
     const xMin = -CANVAS_WIDTH / 2 / scale;
@@ -316,14 +319,15 @@ export default function App() {
       <h1 style={{ margin: 0, fontSize: 18 }}>f(x) engine (Phase 1)</h1>
 
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <label style={{ display: 'grid', gap: 8, minWidth: 360 }}>
           <span>f(x) =</span>
-          <input
-            value={expression}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setExpression(e.target.value)}
+          <textarea
+            value={functionsText}
+            onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFunctionsText(e.target.value)}
             spellCheck={false}
-            style={{ width: 360, padding: '6px 8px' }}
-            placeholder="e.g. 2*x+3, x^2, sin(x), 1/x"
+            rows={4}
+            style={{ width: 360, padding: '6px 8px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}
+            placeholder={'One function per line\n2*x+3\nsin(x)\n0.5*x^2'}
           />
         </label>
 
