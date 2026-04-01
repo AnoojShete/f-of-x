@@ -6,9 +6,14 @@ export type SamplingOptions = {
   xMin: number;
   xMax: number;
 
-  // How densely to sample. We specify in pixels to keep resolution stable across zoom.
-  stepPx: number;
-  scale: number;
+  // World-space sampling step, independent of render scale.
+  stepWorld?: number;
+
+  /** @deprecated prefer stepWorld */
+  stepPx?: number;
+
+  /** @deprecated used only as fallback with stepPx */
+  scale?: number;
 
   // Discontinuity heuristics
   maxAbsYUnits: number;
@@ -61,7 +66,11 @@ function pushHole(holes: Vec2[], p: Vec2) {
  * - extreme local slope (near-vertical behavior such as tan asymptotes)
  */
 export function sampleCompiledFunctionDetailed(compiled: CompiledExpression, opts: SamplingOptions): SamplingResult {
-  const stepUnits = Math.max(0.0005, opts.stepPx / opts.scale);
+  const worldStepFromLegacy =
+    opts.stepPx != null && opts.scale != null && opts.scale > 0
+      ? opts.stepPx / opts.scale
+      : undefined;
+  const stepUnits = Math.max(0.0005, opts.stepWorld ?? worldStepFromLegacy ?? 0.02);
   const maxWorldAbsY = Math.min(opts.maxAbsYUnits, opts.maxWorldAbsY ?? DEFAULT_MAX_WORLD_ABS_Y);
   const maxWorldDyJump = opts.maxWorldDyJump ?? DEFAULT_MAX_WORLD_DY_JUMP;
   const maxAbsSlope = opts.maxAbsSlope ?? DEFAULT_MAX_ABS_SLOPE;

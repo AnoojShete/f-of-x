@@ -30,6 +30,8 @@ const CANVAS_HEIGHT = 520;
 const BALL_RADIUS_PX = 6;
 const ACTIVE_LEVEL_TYPE: LevelType = 'sine';
 const MAX_DT_SEC = 0.05;
+const SAMPLE_STEP_WORLD = 0.02;
+const SAMPLE_MAX_ABS_Y_WORLD = 1e3;
 
 type GameState = 'idle' | 'playing' | 'won';
 type PhysicsSettings = {
@@ -62,6 +64,7 @@ export default function App() {
   const [isBallOnCurve, setIsBallOnCurve] = useState<boolean>(false);
 
   const physicsStateRef = useRef<BallPhysicsState>({
+    previousBallWorld: level.start,
     distance: 0,
     velocity: 0,
     ballWorld: level.start,
@@ -93,7 +96,6 @@ export default function App() {
   const plots = useMemo<GraphPlot[]>(() => {
     const xMin = -CANVAS_WIDTH / 2 / scale;
     const xMax = CANVAS_WIDTH / 2 / scale;
-    const maxAbsYUnits = (CANVAS_HEIGHT / 2 / scale) * 8;
 
     return functions.map((fn) => {
       const compiled = compileExpression(fn.expression);
@@ -104,9 +106,8 @@ export default function App() {
       const sampled = sampleCompiledFunctionDetailed(compiled.compiled, {
         xMin,
         xMax,
-        stepPx: 2,
-        scale,
-        maxAbsYUnits,
+        stepWorld: SAMPLE_STEP_WORLD,
+        maxAbsYUnits: SAMPLE_MAX_ABS_Y_WORLD,
         maxPixelJump: CANVAS_HEIGHT * 2,
       });
 
@@ -208,6 +209,7 @@ export default function App() {
     const launchMagnitude = Math.max(0, physicsSettings.initialVelocity);
 
     physicsStateRef.current = {
+      previousBallWorld: startPoint,
       distance: startDistance,
       velocity: activePath ? computeInitialVelocity(activePath, startDistance, launchMagnitude) : launchMagnitude,
       ballWorld: startPoint,

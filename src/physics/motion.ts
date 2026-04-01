@@ -1,10 +1,11 @@
 import type { Vec2 } from '../types';
-import { findClosestCurveCollision } from './collision';
+import { findClosestCurveCollision, findEarliestSweepCollision } from './collision';
 import { getPathSampleAtDistance, type PathSample } from './traversal';
 
 export type MotionState = 'air' | 'onCurve';
 
 export type BallPhysicsState = {
+  previousBallWorld: Vec2;
   distance: number;
   velocity: number;
   ballWorld: Vec2;
@@ -67,6 +68,7 @@ export function stepPhysicsMode(params: PhysicsStepParams): BallPhysicsState {
 
   let nextDistance = activePath ? clamp(state.distance, 0, activePath.totalLength) : state.distance;
   let nextVelocity = Number.isFinite(state.velocity) ? state.velocity : 0;
+  let nextPreviousBallWorld = state.ballWorld;
   let nextBallWorld = state.ballWorld;
   let nextAirVelocity = state.airVelocity;
   let nextMotionState = state.motionState;
@@ -90,13 +92,18 @@ export function stepPhysicsMode(params: PhysicsStepParams): BallPhysicsState {
       y: nextBallWorld.y + nextAirVelocity.y * dt * speedScale,
     };
 
-    // In air we search all segments and attach to the best valid surface below.
-    const collision = findClosestCurveCollision(paths, nextBallWorld);
+    // Continuous collision detection: sweep previous->current to prevent tunneling.
+    const sweepCollision = findEarliestSweepCollision(paths, state.ballWorld, nextBallWorld);
+    const proximityCollision = sweepCollision ? undefined : findClosestCurveCollision(paths, nextBallWorld);
+    const collision = sweepCollision ?? proximityCollision;
     const hit = collision?.hit;
     const contactThresholdWorld = (radiusPx + 1) / Math.max(1, scale);
     const canAttachFromSpawnRules = nextSpawnAttachGraceSec <= 0 || nextAirVelocity.y < -1e-6;
 
-    if (canAttachFromSpawnRules && hit && hit.distanceWorld <= contactThresholdWorld) {
+    const hasSweepContact = !!sweepCollision;
+    const hasProximityContact = !!proximityCollision && !!hit && hit.distanceWorld <= contactThresholdWorld;
+
+    if (canAttachFromSpawnRules && hit && (hasSweepContact || hasProximityContact)) {
       nextMotionState = 'onCurve';
       nextDistance = hit.arcDistance;
       nextBallWorld = hit.point;
@@ -146,6 +153,7 @@ export function stepPhysicsMode(params: PhysicsStepParams): BallPhysicsState {
   }
 
   return {
+    previousBallWorld: nextPreviousBallWorld,
     distance: nextDistance,
     velocity: nextVelocity,
     ballWorld: nextBallWorld,
@@ -166,6 +174,7 @@ export function stepDeterministicMode(params: DeterministicStepParams): BallPhys
   if (!activePath) {
     return {
       ...state,
+      previousBallWorld: state.ballWorld,
       velocity: 0,
       motionState: 'onCurve',
       airVelocity: { x: 0, y: 0 },
@@ -179,6 +188,7 @@ export function stepDeterministicMode(params: DeterministicStepParams): BallPhys
 
   return {
     ...state,
+    previousBallWorld: state.ballWorld,
     distance: nextDistance,
     velocity: deterministicSpeed,
     ballWorld: nextSample.point,
