@@ -101,24 +101,33 @@ const INITIAL_DISTANCE_WORLD = 0;
 const INITIAL_IMPULSE_PX_PER_SEC = 100;
 const STATIC_VELOCITY_EPSILON = 0.01;
 const SPAWN_ATTACH_GRACE_SEC = 0.1;
+const MAX_WORLD_ABS_Y_FOR_PHYSICS = 1e3;
 
-function buildPath(segments: ReadonlyArray<GraphSegment>): PathSample | undefined {
-  // Prefer the longest continuous segment to avoid jumping across discontinuities.
-  let best: GraphSegment | undefined;
-  let bestScore = 0;
+function isValidPhysicsPoint(p: Vec2): boolean {
+  return Number.isFinite(p.x) && Number.isFinite(p.y) && Math.abs(p.y) <= MAX_WORLD_ABS_Y_FOR_PHYSICS;
+}
 
-  for (const seg of segments) {
-    if (seg.length < 2) continue;
-    const score = seg.length; // proxy for arc length; good enough at fixed sampling density
-    if (score > bestScore) {
-      bestScore = score;
-      best = seg;
+function splitSegmentByValidity(segment: ReadonlyArray<Vec2>): Vec2[][] {
+  const out: Vec2[][] = [];
+  let current: Vec2[] = [];
+
+  for (const p of segment) {
+    if (!isValidPhysicsPoint(p)) {
+      if (current.length >= 2) out.push(current);
+      current = [];
+      continue;
     }
+    current.push(p);
   }
 
-  if (!best || best.length < 2) return undefined;
+  if (current.length >= 2) out.push(current);
+  return out;
+}
 
-  const worldPoints: Vec2[] = [...best];
+function buildPath(segment: ReadonlyArray<Vec2>): PathSample | undefined {
+  if (segment.length < 2) return undefined;
+
+  const worldPoints: Vec2[] = [...segment];
   const cumulative = new Float64Array(worldPoints.length);
 
   let total = 0;
@@ -136,6 +145,18 @@ function buildPath(segments: ReadonlyArray<GraphSegment>): PathSample | undefine
   if (total <= 0 || !Number.isFinite(total)) return undefined;
 
   return { worldPoints, cumulative, totalLength: total };
+}
+
+function buildPaths(segments: ReadonlyArray<GraphSegment>): ReadonlyArray<PathSample> {
+  const out: PathSample[] = [];
+  for (const segment of segments) {
+    const splitSegments = splitSegmentByValidity(segment);
+    for (const split of splitSegments) {
+      const path = buildPath(split);
+      if (path) out.push(path);
+    }
+  }
+  return out;
 }
 
 function findSegmentIndex(cumulative: Float64Array, distance: number): number {
@@ -181,6 +202,29 @@ function findClosestDistanceByX(path: PathSample, targetX: number): number {
   }
 
   return clamp(path.cumulative[bestIndex] ?? 0, 0, path.totalLength);
+}
+
+function chooseActiveSegmentIndex(paths: ReadonlyArray<PathSample>, start: Vec2 | undefined): number | undefined {
+  if (paths.length === 0) return undefined;
+  if (!start) return 0;
+
+  let bestIndex = 0;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (let i = 0; i < paths.length; i++) {
+    const points = paths[i]!.worldPoints;
+    for (const p of points) {
+      const dx = p.x - start.x;
+      const dy = p.y - start.y;
+      const score = dx * dx + dy * dy;
+      if (score < bestScore) {
+        bestScore = score;
+        bestIndex = i;
+      }
+    }
+  }
+
+  return bestIndex;
 }
 
 function computeInitialVelocity(path: PathSample, distance: number, magnitude: number): number {
@@ -358,26 +402,31 @@ export default function BallOverlay({
   const ballWorldRef = useRef<Vec2>({ x: 0, y: 0 });
   const airVelocityRef = useRef<Vec2>({ x: 0, y: 0 });
   const spawnAttachGraceRef = useRef<number>(SPAWN_ATTACH_GRACE_SEC);
+  const activeSegmentIndexRef = useRef<number | undefined>(undefined);
 
-  const path = useMemo(() => buildPath(segments), [segments]);
+  const paths = useMemo(() => buildPaths(segments), [segments]);
 
   // Reset collision state when the path changes (e.g. expression or scale changes).
   useEffect(() => {
     collectedStarsRef.current = new Set();
     goalReachedRef.current = false;
     completedRef.current = false;
-    const startDistance = path
-      ? (startPoint ? findClosestDistanceByX(path, startPoint.x) : clampInitialDistance(path))
+    const activeSegmentIndex = chooseActiveSegmentIndex(paths, startPoint);
+    activeSegmentIndexRef.current = activeSegmentIndex;
+    const activePath = activeSegmentIndex == null ? undefined : paths[activeSegmentIndex];
+
+    const startDistance = activePath
+      ? (startPoint ? findClosestDistanceByX(activePath, startPoint.x) : clampInitialDistance(activePath))
       : INITIAL_DISTANCE_WORLD;
 
     const startWorld: Vec2 = startPoint
       ? { x: startPoint.x, y: startPoint.y }
-      : (path ? path.worldPoints[0]! : { x: 0, y: 0 });
+      : (activePath ? activePath.worldPoints[0]! : { x: 0, y: 0 });
 
     distanceRef.current = startDistance;
     previousDistanceRef.current = startDistance;
     const launchMagnitude = Math.max(0, initialVelocityPxPerSec);
-    velocityRef.current = path ? computeInitialVelocity(path, startDistance, launchMagnitude) : launchMagnitude;
+    velocityRef.current = activePath ? computeInitialVelocity(activePath, startDistance, launchMagnitude) : launchMagnitude;
     ballWorldRef.current = startWorld;
     airVelocityRef.current = { x: 0, y: 0 };
     spawnAttachGraceRef.current = SPAWN_ATTACH_GRACE_SEC;
@@ -389,7 +438,7 @@ export default function BallOverlay({
     rotationRef.current = 0;
     lastTimeRef.current = undefined;
     onCollectedStarsChange?.([]);
-  }, [path, startPoint, onCollectedStarsChange, resetToken, initialVelocityPxPerSec, radiusPx, scale]);
+  }, [paths, startPoint, onCollectedStarsChange, resetToken, initialVelocityPxPerSec, radiusPx, scale]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -405,7 +454,7 @@ export default function BallOverlay({
     canvas.style.height = `${height}px`;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    if (!path) {
+    if (paths.length === 0) {
       ctx.clearRect(0, 0, width, height);
       return;
     }
@@ -423,7 +472,9 @@ export default function BallOverlay({
       const rawDt = previousTime == null ? 0 : (now - previousTime) / 1000;
       const dt = clamp(Number.isFinite(rawDt) ? rawDt : 0, 0, MAX_DT_SEC);
 
-      let distance = clamp(distanceRef.current, 0, path.totalLength);
+      const activeSegmentIndex = activeSegmentIndexRef.current;
+      const activePath = activeSegmentIndex == null ? undefined : paths[activeSegmentIndex];
+      let distance = activePath ? clamp(distanceRef.current, 0, activePath.totalLength) : distanceRef.current;
       let velocity = Number.isFinite(velocityRef.current) ? velocityRef.current : 0;
       let ballWorld = ballWorldRef.current;
       const previousBallWorld = ballWorldRef.current;
@@ -449,7 +500,7 @@ export default function BallOverlay({
               y: ballWorld.y + airVelocity.y * dt * speedScale,
             };
 
-            const hit = findClosestCurveHit(path, ballWorld);
+            const hit = activePath ? findClosestCurveHit(activePath, ballWorld) : undefined;
             const contactThresholdWorld = (radiusPx + 1) / Math.max(1, scale);
             const canAttachFromSpawnRules = spawnAttachGraceRef.current <= 0 || airVelocity.y < -1e-6;
             if (canAttachFromSpawnRules && hit && hit.distanceWorld <= contactThresholdWorld) {
@@ -461,7 +512,10 @@ export default function BallOverlay({
               velocity = clamp(surfaceVelocityFromAir, -maxVelocity, maxVelocity);
             }
           } else {
-            const surfaceSample = getPathSampleAtDistance(path, distance);
+            if (!activePath) {
+              state = 'air';
+            } else {
+            const surfaceSample = getPathSampleAtDistance(activePath, distance);
             const projectedGravity = dot({ x: 0, y: -1 }, surfaceSample.tangent);
             const acceleration = projectedGravity * gravityPxPerSec2;
 
@@ -477,13 +531,13 @@ export default function BallOverlay({
             }
 
             velocity = clamp(Number.isFinite(velocity) ? velocity : 0, -maxVelocity, maxVelocity);
-            distance = clamp(distance + (velocity * speedScale * dt) / Math.max(1, scale), 0, path.totalLength);
+            distance = clamp(distance + (velocity * speedScale * dt) / Math.max(1, scale), 0, activePath.totalLength);
 
-            const nextSample = getPathSampleAtDistance(path, distance);
+            const nextSample = getPathSampleAtDistance(activePath, distance);
             ballWorld = nextSample.point;
 
             const atStartEdge = distance <= 0.0001 && velocity < 0;
-            const atEndEdge = distance >= path.totalLength - 0.0001 && velocity > 0;
+            const atEndEdge = distance >= activePath.totalLength - 0.0001 && velocity > 0;
 
             if (atStartEdge || atEndEdge) {
               state = 'air';
@@ -492,16 +546,25 @@ export default function BallOverlay({
                 y: nextSample.tangent.y * (velocity / Math.max(1, scale)),
               };
             }
+            }
           }
         } else {
           const deterministicSpeed = Math.max(0, speedPxPerSec * speedScale);
-          distance = clamp(distance + (deterministicSpeed * dt) / Math.max(1, scale), 0, path.totalLength);
-          velocity = deterministicSpeed;
+          if (state === 'onCurve' && activePath) {
+            distance = clamp(distance + (deterministicSpeed * dt) / Math.max(1, scale), 0, activePath.totalLength);
+            velocity = deterministicSpeed;
 
-          const sample = getPathSampleAtDistance(path, distance);
-          ballWorld = sample.point;
-          state = 'onCurve';
-          airVelocity = { x: 0, y: 0 };
+            const sample = getPathSampleAtDistance(activePath, distance);
+            ballWorld = sample.point;
+
+            if (distance >= activePath.totalLength - 0.0001) {
+              state = 'air';
+              airVelocity = { x: 0, y: 0 };
+            }
+          } else {
+            state = 'air';
+            velocity = 0;
+          }
         }
       }
 
@@ -526,7 +589,9 @@ export default function BallOverlay({
         previousDistanceRef.current = distance;
       }
 
-      const tangentForRender = getTangentFromNeighbors(path, distance);
+      const tangentForRender = activePath
+        ? getTangentFromNeighbors(activePath, distance)
+        : ({ x: 1, y: 0 } satisfies Vec2);
       const ballWorldOffset = state === 'onCurve'
         ? offsetWorldPointByNormal(ballWorld, tangentForRender, radiusPx, scale)
         : ballWorld;
@@ -621,7 +686,7 @@ export default function BallOverlay({
   }, [
     width,
     height,
-    path,
+    paths,
     isPlaying,
     radiusPx,
     speedPxPerSec,
