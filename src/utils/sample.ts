@@ -6,9 +6,14 @@ export type SamplingOptions = {
   xMin: number;
   xMax: number;
 
-  // How densely to sample. We specify in pixels to keep resolution stable across zoom.
-  stepPx: number;
-  scale: number;
+  // World-space sampling step, independent of render scale.
+  stepWorld?: number;
+
+  /** @deprecated prefer stepWorld */
+  stepPx?: number;
+
+  /** @deprecated used only as fallback with stepPx */
+  scale?: number;
 
   // Discontinuity heuristics
   maxAbsYUnits: number;
@@ -29,6 +34,8 @@ const DEFAULT_MAX_WORLD_DY_JUMP = 5;
 const DEFAULT_MAX_ABS_SLOPE = 14;
 const SAME_X_EPSILON = 1e-9;
 const SAME_X_JUMP_THRESHOLD = 0.5;
+const MIN_VALID_SEGMENT_POINTS = 2;
+const MIN_VALID_SEGMENT_LENGTH_WORLD = 1e-4;
 
 function isValidSamplePoint(p: Vec2, maxWorldAbsY: number): boolean {
   return Number.isFinite(p.x) && Number.isFinite(p.y) && Math.abs(p.y) <= maxWorldAbsY;
@@ -51,6 +58,23 @@ function pushHole(holes: Vec2[], p: Vec2) {
   holes.push(p);
 }
 
+function segmentLengthWorld(segment: ReadonlyArray<Vec2>): number {
+  if (segment.length < 2) return 0;
+
+  let total = 0;
+  for (let i = 1; i < segment.length; i++) {
+    const a = segment[i - 1]!;
+    const b = segment[i]!;
+    total += Math.hypot(b.x - a.x, b.y - a.y);
+  }
+  return total;
+}
+
+function isValidOutputSegment(segment: ReadonlyArray<Vec2>): boolean {
+  if (segment.length < MIN_VALID_SEGMENT_POINTS) return false;
+  return segmentLengthWorld(segment) >= MIN_VALID_SEGMENT_LENGTH_WORLD;
+}
+
 /**
  * Samples a compiled y=f(x) expression over [xMin, xMax] and returns polyline segments.
  *
@@ -61,7 +85,11 @@ function pushHole(holes: Vec2[], p: Vec2) {
  * - extreme local slope (near-vertical behavior such as tan asymptotes)
  */
 export function sampleCompiledFunctionDetailed(compiled: CompiledExpression, opts: SamplingOptions): SamplingResult {
-  const stepUnits = Math.max(0.0005, opts.stepPx / opts.scale);
+  const worldStepFromLegacy =
+    opts.stepPx != null && opts.scale != null && opts.scale > 0
+      ? opts.stepPx / opts.scale
+      : undefined;
+  const stepUnits = Math.max(0.0005, opts.stepWorld ?? worldStepFromLegacy ?? 0.02);
   const maxWorldAbsY = Math.min(opts.maxAbsYUnits, opts.maxWorldAbsY ?? DEFAULT_MAX_WORLD_ABS_Y);
   const maxWorldDyJump = opts.maxWorldDyJump ?? DEFAULT_MAX_WORLD_DY_JUMP;
   const maxAbsSlope = opts.maxAbsSlope ?? DEFAULT_MAX_ABS_SLOPE;
@@ -132,9 +160,10 @@ export function sampleCompiledFunctionDetailed(compiled: CompiledExpression, opt
     prev = p;
   }
 
-  // Remove empty segments
+  // Keep only physically meaningful continuous geometry.
+  // This prevents fake continuity and avoids 1-point or near-zero fragments.
   return {
-    segments: segments.filter((s) => s.length > 0),
+    segments: segments.filter(isValidOutputSegment),
     holes,
   };
 }

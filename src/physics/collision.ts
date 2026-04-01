@@ -15,6 +15,20 @@ export type CurveCollisionResult = {
   hit: CurveHit;
 };
 
+export type CurveSweepCollisionResult = {
+  pathIndex: number;
+  path: PathSample;
+  hit: CurveHit;
+  travelT: number;
+};
+
+const MAX_COLLISION_SEGMENT_LENGTH_WORLD = 2;
+const SURFACE_NEAR_BALL_EPSILON_WORLD = 0.02;
+
+function isSurfaceBelowOrNearBall(surfaceY: number, ballY: number): boolean {
+  return surfaceY <= ballY + SURFACE_NEAR_BALL_EPSILON_WORLD;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -38,6 +52,40 @@ function closestPointOnSegment(p: Vec2, a: Vec2, b: Vec2): { point: Vec2; t: num
   return { point: q, t, distance: Math.hypot(dx, dy) };
 }
 
+function cross(a: Vec2, b: Vec2): number {
+  return a.x * b.y - a.y * b.x;
+}
+
+function subtract(a: Vec2, b: Vec2): Vec2 {
+  return { x: a.x - b.x, y: a.y - b.y };
+}
+
+function segmentIntersection(a0: Vec2, a1: Vec2, b0: Vec2, b1: Vec2): { point: Vec2; t: number; u: number } | undefined {
+  const r = subtract(a1, a0);
+  const s = subtract(b1, b0);
+  const qMinusP = subtract(b0, a0);
+  const rxs = cross(r, s);
+
+  if (Math.abs(rxs) < 1e-12) {
+    return undefined;
+  }
+
+  const t = cross(qMinusP, s) / rxs;
+  const u = cross(qMinusP, r) / rxs;
+  if (t < 0 || t > 1 || u < 0 || u > 1) {
+    return undefined;
+  }
+
+  return {
+    point: {
+      x: a0.x + r.x * t,
+      y: a0.y + r.y * t,
+    },
+    t,
+    u,
+  };
+}
+
 export function findClosestCurveHit(path: PathSample, ball: Vec2): CurveHit | undefined {
   if (path.worldPoints.length < 2) return undefined;
 
@@ -46,9 +94,14 @@ export function findClosestCurveHit(path: PathSample, ball: Vec2): CurveHit | un
   for (let i = 0; i < path.worldPoints.length - 1; i++) {
     const a = path.worldPoints[i]!;
     const b = path.worldPoints[i + 1]!;
+    const segmentLength = Math.hypot(b.x - a.x, b.y - a.y);
+    if (!Number.isFinite(segmentLength) || segmentLength > MAX_COLLISION_SEGMENT_LENGTH_WORLD) {
+      continue;
+    }
+
     const hit = closestPointOnSegment(ball, a, b);
 
-    if (hit.point.y > ball.y + 1e-6) continue;
+    if (!isSurfaceBelowOrNearBall(hit.point.y, ball.y)) continue;
 
     const verticalDistance = Math.max(0, ball.y - hit.point.y);
 
@@ -94,6 +147,66 @@ export function findClosestCurveCollision(
     if (!hit) continue;
     if (!best || hit.verticalDistance < best.hit.verticalDistance || (Math.abs(hit.verticalDistance - best.hit.verticalDistance) < 1e-8 && hit.distanceWorld < best.hit.distanceWorld)) {
       best = { pathIndex: i, path, hit };
+    }
+  }
+
+  return best;
+}
+
+export function findEarliestSweepCollision(
+  paths: ReadonlyArray<PathSample>,
+  from: Vec2,
+  to: Vec2,
+  activeSegmentIndex?: number
+): CurveSweepCollisionResult | undefined {
+  if (paths.length === 0) return undefined;
+
+  const firstPathIndex = activeSegmentIndex != null ? activeSegmentIndex : 0;
+  const lastPathIndex = activeSegmentIndex != null ? activeSegmentIndex : paths.length - 1;
+
+  let best: CurveSweepCollisionResult | undefined;
+
+  for (let pathIndex = firstPathIndex; pathIndex <= lastPathIndex; pathIndex++) {
+    const path = paths[pathIndex];
+    if (!path || path.worldPoints.length < 2) continue;
+
+    for (let i = 0; i < path.worldPoints.length - 1; i++) {
+      const a = path.worldPoints[i]!;
+      const b = path.worldPoints[i + 1]!;
+      const segmentLength = Math.hypot(b.x - a.x, b.y - a.y);
+      if (!Number.isFinite(segmentLength) || segmentLength > MAX_COLLISION_SEGMENT_LENGTH_WORLD) {
+        continue;
+      }
+
+      const hit = segmentIntersection(from, to, a, b);
+      if (!hit) continue;
+
+      // Reject intersections where the curve surface is above the local ball path.
+      const ballYAtHit = from.y + (to.y - from.y) * hit.t;
+      if (!isSurfaceBelowOrNearBall(hit.point.y, ballYAtHit)) continue;
+
+      const tanRaw: Vec2 = { x: b.x - a.x, y: b.y - a.y };
+      const tanLen = Math.hypot(tanRaw.x, tanRaw.y);
+      const tangent = tanLen > 1e-8 ? { x: tanRaw.x / tanLen, y: tanRaw.y / tanLen } : { x: 1, y: 0 };
+      const segLength = path.cumulative[i + 1]! - path.cumulative[i]!;
+      const arcDistance = clamp(path.cumulative[i]! + segLength * hit.u, 0, path.totalLength);
+
+      const sweepHit: CurveSweepCollisionResult = {
+        pathIndex,
+        path,
+        travelT: hit.t,
+        hit: {
+          point: hit.point,
+          tangent,
+          distanceWorld: 0,
+          verticalDistance: Math.max(0, to.y - hit.point.y),
+          arcDistance,
+        },
+      };
+
+      if (!best || sweepHit.travelT < best.travelT) {
+        best = sweepHit;
+      }
     }
   }
 
