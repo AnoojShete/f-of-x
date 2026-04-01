@@ -7,6 +7,8 @@ export type BallOverlayProps = {
   height: number;
   scale: number;
   ballPosition: Vec2;
+  tangent?: Vec2;
+  isOnCurve?: boolean;
   cameraCenter?: Vec2;
 
   /** Ball radius in pixels */
@@ -21,6 +23,8 @@ export default function BallOverlay({
   height,
   scale,
   ballPosition,
+  tangent = { x: 1, y: 0 },
+  isOnCurve = false,
   cameraCenter = { x: 0, y: 0 },
   radiusPx = 6,
   fillStyle = '#ff2d55',
@@ -40,7 +44,33 @@ export default function BallOverlay({
     canvas.style.width = `${width}px`;
     canvas.style.height = `${height}px`;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const canvasPoint = worldToCanvas(ballPosition, width, height, scale, cameraCenter);
+
+    let renderWorld = ballPosition;
+    if (isOnCurve) {
+      const tanLength = Math.hypot(tangent.x, tangent.y);
+      if (tanLength > 1e-8 && Number.isFinite(tanLength)) {
+        const tx = tangent.x / tanLength;
+        const ty = tangent.y / tanLength;
+
+        // Left-hand normal in world-space.
+        let nx = -ty;
+        let ny = tx;
+
+        // Force normal to point upward in world-space.
+        if (ny < 0) {
+          nx = -nx;
+          ny = -ny;
+        }
+
+        const offsetWorld = radiusPx / Math.max(1e-6, scale);
+        renderWorld = {
+          x: ballPosition.x + nx * offsetWorld,
+          y: ballPosition.y + ny * offsetWorld,
+        };
+      }
+    }
+
+    const canvasPoint = worldToCanvas(renderWorld, width, height, scale, cameraCenter);
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = fillStyle;
     ctx.beginPath();
@@ -52,6 +82,8 @@ export default function BallOverlay({
     width,
     height,
     ballPosition,
+    tangent,
+    isOnCurve,
     radiusPx,
     fillStyle,
     cameraCenter,
