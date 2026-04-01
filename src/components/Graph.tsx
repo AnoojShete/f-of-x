@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef } from 'react';
 import type { ReactNode } from 'react';
 import type { GraphPlot, GraphSegment, Vec2 } from '../types';
+import { worldToCanvas } from '../utils/curveGeometry';
 
 export type GraphProps = {
   width: number;
   height: number;
   scale: number; // pixels per unit
   plots: ReadonlyArray<GraphPlot>;
+  cameraCenter?: Vec2;
   children?: ReactNode;
 };
 
@@ -15,30 +17,29 @@ const GRID_STYLE = 'rgba(0,0,0,0.08)';
 const TICK_STYLE = 'rgba(0,0,0,0.45)';
 const LABEL_STYLE = 'rgba(0,0,0,0.72)';
 
-function worldToCanvas(p: Vec2, width: number, height: number, scale: number): Vec2 {
-  // Canvas origin is top-left; we want world origin at center.
-  return {
-    x: width / 2 + p.x * scale,
-    y: height / 2 - p.y * scale,
-  };
-}
-
-function drawAxes(ctx: CanvasRenderingContext2D, width: number, height: number) {
+function drawAxes(ctx: CanvasRenderingContext2D, width: number, height: number, scale: number, cameraCenter: Vec2) {
   ctx.save();
   ctx.strokeStyle = AXIS_STYLE;
   ctx.lineWidth = 1;
 
+  const yAxisX = worldToCanvas({ x: 0, y: cameraCenter.y }, width, height, scale, cameraCenter).x;
+  const xAxisY = worldToCanvas({ x: cameraCenter.x, y: 0 }, width, height, scale, cameraCenter).y;
+
   // X axis
-  ctx.beginPath();
-  ctx.moveTo(0, height / 2);
-  ctx.lineTo(width, height / 2);
-  ctx.stroke();
+  if (xAxisY >= 0 && xAxisY <= height) {
+    ctx.beginPath();
+    ctx.moveTo(0, xAxisY);
+    ctx.lineTo(width, xAxisY);
+    ctx.stroke();
+  }
 
   // Y axis
-  ctx.beginPath();
-  ctx.moveTo(width / 2, 0);
-  ctx.lineTo(width / 2, height);
-  ctx.stroke();
+  if (yAxisX >= 0 && yAxisX <= width) {
+    ctx.beginPath();
+    ctx.moveTo(yAxisX, 0);
+    ctx.lineTo(yAxisX, height);
+    ctx.stroke();
+  }
 
   ctx.restore();
 }
@@ -52,11 +53,11 @@ function formatTickLabel(value: number): string {
   return Number.isInteger(value) ? String(value) : String(value.toFixed(2));
 }
 
-function drawGridAndTicks(ctx: CanvasRenderingContext2D, width: number, height: number, scale: number) {
-  const xMin = -width / 2 / scale;
-  const xMax = width / 2 / scale;
-  const yMin = -height / 2 / scale;
-  const yMax = height / 2 / scale;
+function drawGridAndTicks(ctx: CanvasRenderingContext2D, width: number, height: number, scale: number, cameraCenter: Vec2) {
+  const xMin = cameraCenter.x - width / 2 / scale;
+  const xMax = cameraCenter.x + width / 2 / scale;
+  const yMin = cameraCenter.y - height / 2 / scale;
+  const yMax = cameraCenter.y + height / 2 / scale;
 
   const xIntMin = Math.ceil(xMin);
   const xIntMax = Math.floor(xMax);
@@ -68,7 +69,7 @@ function drawGridAndTicks(ctx: CanvasRenderingContext2D, width: number, height: 
   ctx.lineWidth = 1;
 
   for (let x = xIntMin; x <= xIntMax; x++) {
-    const px = width / 2 + x * scale;
+    const px = worldToCanvas({ x, y: cameraCenter.y }, width, height, scale, cameraCenter).x;
     ctx.beginPath();
     ctx.moveTo(px, 0);
     ctx.lineTo(px, height);
@@ -76,7 +77,7 @@ function drawGridAndTicks(ctx: CanvasRenderingContext2D, width: number, height: 
   }
 
   for (let y = yIntMin; y <= yIntMax; y++) {
-    const py = height / 2 - y * scale;
+    const py = worldToCanvas({ x: cameraCenter.x, y }, width, height, scale, cameraCenter).y;
     ctx.beginPath();
     ctx.moveTo(0, py);
     ctx.lineTo(width, py);
@@ -85,22 +86,22 @@ function drawGridAndTicks(ctx: CanvasRenderingContext2D, width: number, height: 
 
   ctx.strokeStyle = TICK_STYLE;
   const tickSize = 4;
-  const axisX = width / 2;
-  const axisY = height / 2;
+  const axisX = worldToCanvas({ x: 0, y: cameraCenter.y }, width, height, scale, cameraCenter).x;
+  const axisY = worldToCanvas({ x: cameraCenter.x, y: 0 }, width, height, scale, cameraCenter).y;
 
   for (let x = xIntMin; x <= xIntMax; x++) {
-    const px = axisX + x * scale;
+    const px = worldToCanvas({ x, y: cameraCenter.y }, width, height, scale, cameraCenter).x;
     ctx.beginPath();
-    ctx.moveTo(px, axisY - tickSize);
-    ctx.lineTo(px, axisY + tickSize);
+    ctx.moveTo(px, Math.max(0, axisY - tickSize));
+    ctx.lineTo(px, Math.min(height, axisY + tickSize));
     ctx.stroke();
   }
 
   for (let y = yIntMin; y <= yIntMax; y++) {
-    const py = axisY - y * scale;
+    const py = worldToCanvas({ x: cameraCenter.x, y }, width, height, scale, cameraCenter).y;
     ctx.beginPath();
-    ctx.moveTo(axisX - tickSize, py);
-    ctx.lineTo(axisX + tickSize, py);
+    ctx.moveTo(Math.max(0, axisX - tickSize), py);
+    ctx.lineTo(Math.min(width, axisX + tickSize), py);
     ctx.stroke();
   }
 
@@ -112,7 +113,7 @@ function drawGridAndTicks(ctx: CanvasRenderingContext2D, width: number, height: 
   // Integer labels near axes for quick position reading.
   for (const x of [xIntMin, -1, 0, 1, xIntMax]) {
     if (x < xIntMin || x > xIntMax) continue;
-    const px = axisX + x * scale;
+    const px = worldToCanvas({ x, y: cameraCenter.y }, width, height, scale, cameraCenter).x;
     ctx.fillText(formatTickLabel(x), px, axisY + tickSize + 3);
   }
 
@@ -120,7 +121,7 @@ function drawGridAndTicks(ctx: CanvasRenderingContext2D, width: number, height: 
   ctx.textBaseline = 'middle';
   for (const y of [yIntMin, -1, 0, 1, yIntMax]) {
     if (y < yIntMin || y > yIntMax) continue;
-    const py = axisY - y * scale;
+    const py = worldToCanvas({ x: cameraCenter.x, y }, width, height, scale, cameraCenter).y;
     ctx.fillText(formatTickLabel(y), axisX - tickSize - 3, py);
   }
 
@@ -130,7 +131,7 @@ function drawGridAndTicks(ctx: CanvasRenderingContext2D, width: number, height: 
   const specialX = [-Math.PI, -Math.PI / 2, Math.PI / 2, Math.PI];
   for (const x of specialX) {
     if (x < xMin || x > xMax) continue;
-    const px = axisX + x * scale;
+    const px = worldToCanvas({ x, y: cameraCenter.y }, width, height, scale, cameraCenter).x;
     // Draw explicit special-value ticks so labels are anchored to visible marks.
     ctx.beginPath();
     ctx.moveTo(px, axisY - tickSize - 2);
@@ -147,22 +148,23 @@ function drawSegments(
   segments: ReadonlyArray<GraphSegment>,
   width: number,
   height: number,
-  scale: number
+  scale: number,
+  cameraCenter: Vec2
 ) {
   ctx.beginPath();
   for (const segment of segments) {
     if (segment.length === 0) continue;
-    const first = worldToCanvas(segment[0]!, width, height, scale);
+    const first = worldToCanvas(segment[0]!, width, height, scale, cameraCenter);
     ctx.moveTo(first.x, first.y);
     for (let i = 1; i < segment.length; i++) {
-      const p = worldToCanvas(segment[i]!, width, height, scale);
+      const p = worldToCanvas(segment[i]!, width, height, scale, cameraCenter);
       ctx.lineTo(p.x, p.y);
     }
   }
   ctx.stroke();
 }
 
-export default function Graph({ width, height, scale, plots, children }: GraphProps) {
+export default function Graph({ width, height, scale, plots, cameraCenter = { x: 0, y: 0 }, children }: GraphProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const firstError = useMemo(() => {
@@ -190,21 +192,21 @@ export default function Graph({ width, height, scale, plots, children }: GraphPr
 
     let raf = requestAnimationFrame(() => {
       ctx.clearRect(0, 0, width, height);
-      drawGridAndTicks(ctx, width, height, scale);
-      drawAxes(ctx, width, height);
+      drawGridAndTicks(ctx, width, height, scale, cameraCenter);
+      drawAxes(ctx, width, height, scale, cameraCenter);
 
       for (const plot of plots) {
         if (plot.error) continue;
         ctx.save();
         ctx.strokeStyle = plot.strokeStyle ?? '#0b5fff';
         ctx.lineWidth = plot.lineWidth ?? 2;
-        drawSegments(ctx, plot.segments, width, height, scale);
+        drawSegments(ctx, plot.segments, width, height, scale, cameraCenter);
         ctx.restore();
       }
     });
 
     return () => cancelAnimationFrame(raf);
-  }, [width, height, scale, plots]);
+  }, [width, height, scale, plots, cameraCenter]);
 
   return (
     <div style={{ display: 'grid', gap: 8 }}>

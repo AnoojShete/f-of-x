@@ -10,6 +10,7 @@ import { compileExpression } from './utils/evaluate';
 import { generateLevel } from './utils/levelGenerator';
 import type { LevelType } from './utils/levelGenerator';
 import { sampleCompiledFunction } from './utils/sample';
+import type { Vec2 } from './types';
 import type { GraphFunction } from './types';
 import type { GraphPlot } from './types';
 import type { LevelRecord } from './types';
@@ -32,6 +33,8 @@ export default function App() {
   const [expression, setExpression] = useState<string>(level.solution);
   const [scale, setScale] = useState<number>(60); // pixels per unit
   const [isPhysicsEnabled, setIsPhysicsEnabled] = useState<boolean>(true);
+  const [isCameraFollowEnabled, setIsCameraFollowEnabled] = useState<boolean>(false);
+  const [cameraCenter, setCameraCenter] = useState<Vec2>({ x: 0, y: 0 });
   const [isDebugPanelOpen, setIsDebugPanelOpen] = useState<boolean>(false);
   const [physicsSettings, setPhysicsSettings] = useState<PhysicsSettings>({
     gravity: 420,
@@ -111,6 +114,7 @@ export default function App() {
   const startGame = useCallback(() => {
     setCollectedStarIds([]);
     setLevelResult(undefined);
+    setCameraCenter({ x: 0, y: 0 });
     setResetToken((v) => v + 1);
     setGameState('playing');
   }, []);
@@ -118,6 +122,7 @@ export default function App() {
   const restartGame = useCallback(() => {
     setCollectedStarIds([]);
     setLevelResult(undefined);
+    setCameraCenter({ x: 0, y: 0 });
     setResetToken((v) => v + 1);
     setGameState('idle');
   }, []);
@@ -126,6 +131,17 @@ export default function App() {
     setLevelResult(result);
     setGameState('won');
   }, []);
+
+  const handleBallPositionChange = useCallback(
+    (ball: Vec2) => {
+      if (!isCameraFollowEnabled) return;
+      setCameraCenter((prev) => ({
+        x: prev.x + (ball.x - prev.x) * 0.1,
+        y: prev.y + (ball.y - prev.y) * 0.1,
+      }));
+    },
+    [isCameraFollowEnabled]
+  );
 
   return (
     <div style={{ padding: 16, display: 'grid', gap: 12 }}>
@@ -161,6 +177,20 @@ export default function App() {
           style={{ padding: '6px 10px' }}
         >
           Physics: {isPhysicsEnabled ? 'ON' : 'OFF'}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setIsCameraFollowEnabled((v) => {
+              const next = !v;
+              if (!next) setCameraCenter({ x: 0, y: 0 });
+              return next;
+            });
+          }}
+          style={{ padding: '6px 10px' }}
+        >
+          Camera Follow: {isCameraFollowEnabled ? 'ON' : 'OFF'}
         </button>
 
         <button
@@ -277,11 +307,13 @@ export default function App() {
         height={CANVAS_HEIGHT}
         scale={scale}
         plots={plots}
+        cameraCenter={cameraCenter}
       >
         <GameObjectsOverlay
           width={CANVAS_WIDTH}
           height={CANVAS_HEIGHT}
           scale={scale}
+          cameraCenter={cameraCenter}
           startPoint={startPoint}
           goal={goal}
           stars={stars}
@@ -291,6 +323,7 @@ export default function App() {
           width={CANVAS_WIDTH}
           height={CANVAS_HEIGHT}
           scale={scale}
+          cameraCenter={cameraCenter}
           segments={plots[0]?.error ? [] : (plots[0]?.segments ?? [])}
           isPlaying={gameState === 'playing'}
           isPhysicsEnabled={isPhysicsEnabled}
@@ -303,6 +336,7 @@ export default function App() {
           speedMultiplier={physicsSettings.speedMultiplier}
           stars={collisionStars}
           onLevelComplete={handleLevelComplete}
+          onBallPositionChange={handleBallPositionChange}
           onCollectedStarsChange={setCollectedStarIds}
           {...(goalForCollision ? { goal: goalForCollision } : {})}
         />
