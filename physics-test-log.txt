@@ -1,0 +1,7 @@
+[PASS] 1/x -> ball falls at x=0
+[PASS] tan(x) -> no sticking at asymptotes
+[PASS] log(x) -> no collision near x<=0
+[PASS] (x^2-1)/(x-1) -> hole detection
+[PASS] -(x+pi)^3-2 -> no vertical sticking
+[PASS] sin(x) -> smooth traversal
+[PASS] multi-curve -> attach switching

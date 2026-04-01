@@ -1,0 +1,37 @@
+{
+  "summary": {
+    "total": 7,
+    "passed": 7,
+    "failed": 0
+  },
+  "results": [
+    {
+      "name": "1/x -> ball falls at x=0",
+      "passed": true
+    },
+    {
+      "name": "tan(x) -> no sticking at asymptotes",
+      "passed": true
+    },
+    {
+      "name": "log(x) -> no collision near x<=0",
+      "passed": true
+    },
+    {
+      "name": "(x^2-1)/(x-1) -> hole detection",
+      "passed": true
+    },
+    {
+      "name": "-(x+pi)^3-2 -> no vertical sticking",
+      "passed": true
+    },
+    {
+      "name": "sin(x) -> smooth traversal",
+      "passed": true
+    },
+    {
+      "name": "multi-curve -> attach switching",
+      "passed": true
+    }
+  ]
+}
