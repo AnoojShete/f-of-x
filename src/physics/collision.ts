@@ -22,6 +22,13 @@ export type CurveSweepCollisionResult = {
   travelT: number;
 };
 
+const MAX_COLLISION_SEGMENT_LENGTH_WORLD = 2;
+const SURFACE_NEAR_BALL_EPSILON_WORLD = 0.02;
+
+function isSurfaceBelowOrNearBall(surfaceY: number, ballY: number): boolean {
+  return surfaceY <= ballY + SURFACE_NEAR_BALL_EPSILON_WORLD;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -87,9 +94,14 @@ export function findClosestCurveHit(path: PathSample, ball: Vec2): CurveHit | un
   for (let i = 0; i < path.worldPoints.length - 1; i++) {
     const a = path.worldPoints[i]!;
     const b = path.worldPoints[i + 1]!;
+    const segmentLength = Math.hypot(b.x - a.x, b.y - a.y);
+    if (!Number.isFinite(segmentLength) || segmentLength > MAX_COLLISION_SEGMENT_LENGTH_WORLD) {
+      continue;
+    }
+
     const hit = closestPointOnSegment(ball, a, b);
 
-    if (hit.point.y > ball.y + 1e-6) continue;
+    if (!isSurfaceBelowOrNearBall(hit.point.y, ball.y)) continue;
 
     const verticalDistance = Math.max(0, ball.y - hit.point.y);
 
@@ -161,8 +173,17 @@ export function findEarliestSweepCollision(
     for (let i = 0; i < path.worldPoints.length - 1; i++) {
       const a = path.worldPoints[i]!;
       const b = path.worldPoints[i + 1]!;
+      const segmentLength = Math.hypot(b.x - a.x, b.y - a.y);
+      if (!Number.isFinite(segmentLength) || segmentLength > MAX_COLLISION_SEGMENT_LENGTH_WORLD) {
+        continue;
+      }
+
       const hit = segmentIntersection(from, to, a, b);
       if (!hit) continue;
+
+      // Reject intersections where the curve surface is above the local ball path.
+      const ballYAtHit = from.y + (to.y - from.y) * hit.t;
+      if (!isSurfaceBelowOrNearBall(hit.point.y, ballYAtHit)) continue;
 
       const tanRaw: Vec2 = { x: b.x - a.x, y: b.y - a.y };
       const tanLen = Math.hypot(tanRaw.x, tanRaw.y);

@@ -30,6 +30,9 @@ const CANVAS_HEIGHT = 520;
 const BALL_RADIUS_PX = 6;
 const ACTIVE_LEVEL_TYPE: LevelType = 'sine';
 const MAX_DT_SEC = 0.05;
+const PHYSICS_MIN_SUBSTEPS = 4;
+const PHYSICS_MAX_SUBSTEPS = 10;
+const PHYSICS_SUBSTEP_TARGET_SEC = 1 / 240;
 const SAMPLE_STEP_WORLD = 0.02;
 const SAMPLE_MAX_ABS_Y_WORLD = 1e3;
 
@@ -241,9 +244,17 @@ export default function App() {
         const maxVelocity = Math.max(80, 220 * 3) * Math.max(1, speedScale);
 
         const current = physicsStateRef.current;
-        const next = isPhysicsEnabled
-          ? stepPhysicsMode({
-              dt,
+        let next = current;
+
+        if (isPhysicsEnabled) {
+          const estimatedSubsteps = Math.ceil(dt / PHYSICS_SUBSTEP_TARGET_SEC);
+          const substeps = Math.max(PHYSICS_MIN_SUBSTEPS, Math.min(PHYSICS_MAX_SUBSTEPS, estimatedSubsteps));
+          const subDt = substeps > 0 ? dt / substeps : dt;
+
+          // Smaller integration steps improve collision accuracy and reduce tunneling.
+          for (let i = 0; i < substeps; i++) {
+            next = stepPhysicsMode({
+              dt: subDt,
               paths: traversalPaths,
               scale,
               speedScale,
@@ -251,16 +262,19 @@ export default function App() {
               gravityPxPerSec2: physicsSettings.gravity,
               frictionPerSec: physicsSettings.friction,
               maxVelocity,
-              state: current,
-            })
-          : stepDeterministicMode({
-              dt: deterministicDt,
-              paths: traversalPaths,
-              scale,
-              speedPxPerSec: 220,
-              speedScale,
-              state: current,
+              state: next,
             });
+          }
+        } else {
+          next = stepDeterministicMode({
+            dt: deterministicDt,
+            paths: traversalPaths,
+            scale,
+            speedPxPerSec: 220,
+            speedScale,
+            state: current,
+          });
+        }
 
         physicsStateRef.current = next;
         setBallPosition(next.ballWorld);

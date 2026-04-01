@@ -34,6 +34,8 @@ const DEFAULT_MAX_WORLD_DY_JUMP = 5;
 const DEFAULT_MAX_ABS_SLOPE = 14;
 const SAME_X_EPSILON = 1e-9;
 const SAME_X_JUMP_THRESHOLD = 0.5;
+const MIN_VALID_SEGMENT_POINTS = 2;
+const MIN_VALID_SEGMENT_LENGTH_WORLD = 1e-4;
 
 function isValidSamplePoint(p: Vec2, maxWorldAbsY: number): boolean {
   return Number.isFinite(p.x) && Number.isFinite(p.y) && Math.abs(p.y) <= maxWorldAbsY;
@@ -54,6 +56,23 @@ function pushHole(holes: Vec2[], p: Vec2) {
     if (Math.abs(h.x - p.x) < eps && Math.abs(h.y - p.y) < eps) return;
   }
   holes.push(p);
+}
+
+function segmentLengthWorld(segment: ReadonlyArray<Vec2>): number {
+  if (segment.length < 2) return 0;
+
+  let total = 0;
+  for (let i = 1; i < segment.length; i++) {
+    const a = segment[i - 1]!;
+    const b = segment[i]!;
+    total += Math.hypot(b.x - a.x, b.y - a.y);
+  }
+  return total;
+}
+
+function isValidOutputSegment(segment: ReadonlyArray<Vec2>): boolean {
+  if (segment.length < MIN_VALID_SEGMENT_POINTS) return false;
+  return segmentLengthWorld(segment) >= MIN_VALID_SEGMENT_LENGTH_WORLD;
 }
 
 /**
@@ -141,9 +160,10 @@ export function sampleCompiledFunctionDetailed(compiled: CompiledExpression, opt
     prev = p;
   }
 
-  // Remove empty segments
+  // Keep only physically meaningful continuous geometry.
+  // This prevents fake continuity and avoids 1-point or near-zero fragments.
   return {
-    segments: segments.filter((s) => s.length > 0),
+    segments: segments.filter(isValidOutputSegment),
     holes,
   };
 }
