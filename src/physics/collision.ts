@@ -5,6 +5,7 @@ export type CurveHit = {
   point: Vec2;
   tangent: Vec2;
   distanceWorld: number;
+  verticalDistance: number;
   arcDistance: number;
 };
 
@@ -49,7 +50,9 @@ export function findClosestCurveHit(path: PathSample, ball: Vec2): CurveHit | un
 
     if (hit.point.y > ball.y + 1e-6) continue;
 
-    if (!best || hit.distance < best.distanceWorld) {
+    const verticalDistance = Math.max(0, ball.y - hit.point.y);
+
+    if (!best || verticalDistance < best.verticalDistance || (Math.abs(verticalDistance - best.verticalDistance) < 1e-8 && hit.distance < best.distanceWorld)) {
       const segPxLength = path.cumulative[i + 1]! - path.cumulative[i]!;
       const arcDistance = path.cumulative[i]! + segPxLength * hit.t;
       const tanRaw: Vec2 = { x: b.x - a.x, y: b.y - a.y };
@@ -60,6 +63,7 @@ export function findClosestCurveHit(path: PathSample, ball: Vec2): CurveHit | un
         point: hit.point,
         tangent,
         distanceWorld: hit.distance,
+        verticalDistance,
         arcDistance: clamp(arcDistance, 0, path.totalLength),
       };
     }
@@ -88,7 +92,7 @@ export function findClosestCurveCollision(
     const path = paths[i]!;
     const hit = findClosestCurveHit(path, ball);
     if (!hit) continue;
-    if (!best || hit.distanceWorld < best.hit.distanceWorld) {
+    if (!best || hit.verticalDistance < best.hit.verticalDistance || (Math.abs(hit.verticalDistance - best.hit.verticalDistance) < 1e-8 && hit.distanceWorld < best.hit.distanceWorld)) {
       best = { pathIndex: i, path, hit };
     }
   }

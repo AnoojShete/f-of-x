@@ -60,7 +60,9 @@ export function stepPhysicsMode(params: PhysicsStepParams): BallPhysicsState {
 
   if (dt <= 0) return state;
 
-  const resolvedSegmentIndex = state.activeSegmentIndex ?? (paths.length > 0 ? 0 : undefined);
+  const resolvedSegmentIndex = state.motionState === 'onCurve'
+    ? state.activeSegmentIndex
+    : (state.activeSegmentIndex ?? (paths.length > 0 ? 0 : undefined));
   const activePath = resolvedSegmentIndex == null ? undefined : paths[resolvedSegmentIndex];
 
   let nextDistance = activePath ? clamp(state.distance, 0, activePath.totalLength) : state.distance;
@@ -69,6 +71,7 @@ export function stepPhysicsMode(params: PhysicsStepParams): BallPhysicsState {
   let nextAirVelocity = state.airVelocity;
   let nextMotionState = state.motionState;
   let nextSpawnAttachGraceSec = state.spawnAttachGraceSec;
+  let nextActiveSegmentIndex = state.activeSegmentIndex;
 
   const gravityWorldPerSec2 = -Math.max(0, gravityPxPerSec2) / Math.max(1, scale);
 
@@ -87,7 +90,8 @@ export function stepPhysicsMode(params: PhysicsStepParams): BallPhysicsState {
       y: nextBallWorld.y + nextAirVelocity.y * dt * speedScale,
     };
 
-    const collision = findClosestCurveCollision(paths, nextBallWorld, resolvedSegmentIndex);
+    // In air we search all segments and attach to the best valid surface below.
+    const collision = findClosestCurveCollision(paths, nextBallWorld);
     const hit = collision?.hit;
     const contactThresholdWorld = (radiusPx + 1) / Math.max(1, scale);
     const canAttachFromSpawnRules = nextSpawnAttachGraceSec <= 0 || nextAirVelocity.y < -1e-6;
@@ -96,6 +100,7 @@ export function stepPhysicsMode(params: PhysicsStepParams): BallPhysicsState {
       nextMotionState = 'onCurve';
       nextDistance = hit.arcDistance;
       nextBallWorld = hit.point;
+      nextActiveSegmentIndex = collision.pathIndex;
 
       const surfaceVelocityFromAir = dot(nextAirVelocity, hit.tangent) * scale;
       nextVelocity = clamp(surfaceVelocityFromAir, -maxVelocity, maxVelocity);
@@ -103,6 +108,7 @@ export function stepPhysicsMode(params: PhysicsStepParams): BallPhysicsState {
   } else {
     if (!activePath) {
       nextMotionState = 'air';
+      nextActiveSegmentIndex = undefined;
     } else {
       const surfaceSample = getPathSampleAtDistance(activePath, nextDistance);
       const projectedGravity = dot({ x: 0, y: -1 }, surfaceSample.tangent);
@@ -130,6 +136,7 @@ export function stepPhysicsMode(params: PhysicsStepParams): BallPhysicsState {
 
       if (atStartEdge || atEndEdge) {
         nextMotionState = 'air';
+        nextActiveSegmentIndex = undefined;
         nextAirVelocity = {
           x: nextSample.tangent.x * (nextVelocity / Math.max(1, scale)),
           y: nextSample.tangent.y * (nextVelocity / Math.max(1, scale)),
@@ -145,7 +152,7 @@ export function stepPhysicsMode(params: PhysicsStepParams): BallPhysicsState {
     airVelocity: nextAirVelocity,
     motionState: nextMotionState,
     spawnAttachGraceSec: nextSpawnAttachGraceSec,
-    activeSegmentIndex: resolvedSegmentIndex,
+    activeSegmentIndex: nextActiveSegmentIndex,
   };
 }
 
