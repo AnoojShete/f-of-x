@@ -4,6 +4,12 @@ import { checkGoalCollision, collectStars } from '../utils/collision';
 import type { Star } from '../utils/collision';
 import { offsetWorldPointByNormal, upwardNormalFromTangent, worldToCanvas } from '../utils/curveGeometry';
 
+export type LevelCompleteResult = {
+  success: true;
+  starsCollected: number;
+  totalStars: number;
+};
+
 export type BallOverlayProps = {
   width: number;
   height: number;
@@ -11,6 +17,7 @@ export type BallOverlayProps = {
   segments: ReadonlyArray<GraphSegment>;
   startPoint?: Vec2;
   isPlaying?: boolean;
+  isPhysicsEnabled?: boolean;
   resetToken?: number;
 
   /** Ball radius in pixels */
@@ -18,6 +25,18 @@ export type BallOverlayProps = {
 
   /** Ball speed along the polyline, in pixels per second */
   speedPxPerSec?: number;
+
+  /** Gravity acceleration projected along tangent (px/sec^2). */
+  gravityPxPerSec2?: number;
+
+  /** Exponential damping per second. */
+  frictionPerSec?: number;
+
+  /** One-time initial launch speed magnitude (px/sec). */
+  initialVelocityPxPerSec?: number;
+
+  /** Global movement multiplier for debug tuning. */
+  speedMultiplier?: number;
 
   /** Fill color */
   fillStyle?: string;
@@ -36,6 +55,9 @@ export type BallOverlayProps = {
 
   /** Called once when the ball reaches the goal. */
   onGoalReached?: () => void;
+
+  /** Called with run result when the level is completed. */
+  onLevelComplete?: (result: LevelCompleteResult) => void;
 
   /** Called when a star is collected. */
   onStarCollected?: (starId: string) => void;
@@ -143,16 +165,16 @@ function findClosestDistanceByX(path: PathSample, targetX: number): number {
   return clamp(path.cumulative[bestIndex] ?? 0, 0, path.totalLength);
 }
 
-function computeInitialVelocity(path: PathSample, distance: number): number {
+function computeInitialVelocity(path: PathSample, distance: number, magnitude: number): number {
   const tangent = getTangentFromNeighbors(path, distance);
   const tangentMagnitude = Math.hypot(tangent.x, tangent.y);
   if (!(tangentMagnitude > 1e-8) || !Number.isFinite(tangentMagnitude)) {
-    return INITIAL_IMPULSE_PX_PER_SEC;
+    return magnitude;
   }
 
   // Velocity is scalar along arc length; sign chooses tangent direction at start.
   const sign = tangent.x < 0 ? -1 : 1;
-  return sign * INITIAL_IMPULSE_PX_PER_SEC;
+  return sign * magnitude;
 }
 
 function ensureNonDegenerateSegmentIndex(path: PathSample, index: number): number {
@@ -214,15 +236,21 @@ export default function BallOverlay({
   segments,
   startPoint,
   isPlaying = true,
+  isPhysicsEnabled = true,
   resetToken = 0,
   radiusPx = 6,
   speedPxPerSec = 220,
+  gravityPxPerSec2 = GRAVITY_ALONG_PATH_PX_PER_SEC2,
+  frictionPerSec = FRICTION_PER_SEC,
+  initialVelocityPxPerSec = INITIAL_IMPULSE_PX_PER_SEC,
+  speedMultiplier = 1,
   fillStyle = '#ff2d55',
   goal,
   goalThreshold = 0.25,
   stars = [],
   starThreshold = 0.25,
   onGoalReached,
+  onLevelComplete,
   onStarCollected,
   onCollectedStarsChange,
   debugVectors = false,
@@ -235,6 +263,7 @@ export default function BallOverlay({
   const lastTimeRef = useRef<number | undefined>(undefined);
   const previousDistanceRef = useRef<number>(INITIAL_DISTANCE_PX);
   const rotationRef = useRef<number>(0);
+  const completedRef = useRef<boolean>(false);
 
   const path = useMemo(() => buildPath(segments, width, height, scale), [segments, width, height, scale]);
 
@@ -242,16 +271,18 @@ export default function BallOverlay({
   useEffect(() => {
     collectedStarsRef.current = new Set();
     goalReachedRef.current = false;
+    completedRef.current = false;
     const startDistance = path
       ? (startPoint ? findClosestDistanceByX(path, startPoint.x) : clampInitialDistance(path))
       : INITIAL_DISTANCE_PX;
     distanceRef.current = startDistance;
     previousDistanceRef.current = startDistance;
-    velocityRef.current = path ? computeInitialVelocity(path, startDistance) : INITIAL_IMPULSE_PX_PER_SEC;
+    const launchMagnitude = Math.max(0, initialVelocityPxPerSec);
+    velocityRef.current = path ? computeInitialVelocity(path, startDistance, launchMagnitude) : launchMagnitude;
     rotationRef.current = 0;
     lastTimeRef.current = undefined;
     onCollectedStarsChange?.([]);
-  }, [path, startPoint, onCollectedStarsChange, resetToken]);
+  }, [path, startPoint, onCollectedStarsChange, resetToken, initialVelocityPxPerSec]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -273,9 +304,12 @@ export default function BallOverlay({
     }
 
     let rafId = 0;
-    const maxVelocity = Math.max(80, speedPxPerSec * 3);
+    const speedScale = Math.max(0, speedMultiplier);
+    const maxVelocity = Math.max(80, speedPxPerSec * 3) * Math.max(1, speedScale);
 
     const tick = (now: number) => {
+      if (completedRef.current) return;
+
       const previousTime = lastTimeRef.current;
       lastTimeRef.current = now;
 
@@ -286,24 +320,30 @@ export default function BallOverlay({
       let velocity = Number.isFinite(velocityRef.current) ? velocityRef.current : 0;
 
       if (isPlaying && dt > 0) {
-        const tangent = getTangentFromNeighbors(path, distance);
-        const projectedGravity = 0 * tangent.x + -1 * tangent.y;
-        const acceleration = projectedGravity * GRAVITY_ALONG_PATH_PX_PER_SEC2;
+        if (isPhysicsEnabled) {
+          const tangent = getTangentFromNeighbors(path, distance);
+          const projectedGravity = 0 * tangent.x + -1 * tangent.y;
+          const acceleration = projectedGravity * gravityPxPerSec2;
 
-        if (Number.isFinite(acceleration)) {
-          velocity += acceleration * dt;
+          if (Number.isFinite(acceleration)) {
+            velocity += acceleration * dt;
+          }
+
+          // Exponential damping keeps friction smooth across variable frame times.
+          const frictionFactor = Math.exp(-Math.max(0, frictionPerSec) * dt);
+          velocity *= frictionFactor;
+
+          if (Math.abs(velocity) < STATIC_VELOCITY_EPSILON) {
+            velocity = 0;
+          }
+
+          velocity = clamp(Number.isFinite(velocity) ? velocity : 0, -maxVelocity, maxVelocity);
+          distance = clamp(distance + velocity * speedScale * dt, 0, path.totalLength);
+        } else {
+          const deterministicSpeed = Math.max(0, speedPxPerSec * speedScale);
+          distance = clamp(distance + deterministicSpeed * dt, 0, path.totalLength);
+          velocity = deterministicSpeed;
         }
-
-        // Exponential damping keeps friction smooth across variable frame times.
-        const frictionFactor = Math.exp(-FRICTION_PER_SEC * dt);
-        velocity *= frictionFactor;
-
-        if (Math.abs(velocity) < STATIC_VELOCITY_EPSILON) {
-          velocity = 0;
-        }
-
-        velocity = clamp(Number.isFinite(velocity) ? velocity : 0, -maxVelocity, maxVelocity);
-        distance = clamp(distance + velocity * dt, 0, path.totalLength);
       }
 
       velocityRef.current = velocity;
@@ -341,10 +381,21 @@ export default function BallOverlay({
       // Collision logic (pure + modular): goal + star collection.
       if (isPlaying && goal && !goalReachedRef.current && checkGoalCollision(ballWorld, goal, goalThreshold)) {
         goalReachedRef.current = true;
+        completedRef.current = true;
+
+        const starsCollected = collectedStarsRef.current.size;
+        const totalStars = stars.length;
+
+        onLevelComplete?.({
+          success: true,
+          starsCollected,
+          totalStars,
+        });
+
         onGoalReached?.();
       }
 
-      if (isPlaying && stars.length > 0) {
+      if (isPlaying && !completedRef.current && stars.length > 0) {
         const collected = collectedStarsRef.current;
         const { newlyCollectedIds } = collectStars(ballWorld, stars, collected, starThreshold);
         if (newlyCollectedIds.length > 0) {
@@ -398,7 +449,7 @@ export default function BallOverlay({
         ctx.restore();
       }
 
-      if (isPlaying) {
+      if (isPlaying && !completedRef.current) {
         rafId = requestAnimationFrame(tick);
       }
     };
@@ -423,8 +474,13 @@ export default function BallOverlay({
     stars,
     starThreshold,
     onGoalReached,
+    onLevelComplete,
     onStarCollected,
     onCollectedStarsChange,
+    isPhysicsEnabled,
+    gravityPxPerSec2,
+    frictionPerSec,
+    speedMultiplier,
     debugVectors,
   ]);
 

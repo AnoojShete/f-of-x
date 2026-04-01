@@ -35,7 +35,8 @@ const LEVEL_BUILDERS: Record<LevelType, LevelBuilder> = {
     const basePoints = [
       { x: -Math.PI, y: 0 },
       { x: -Math.PI / 2, y: -1 },
-      { x: 0, y: 0 },
+      // Slight offset keeps the level recognizable but prevents a pure template copy.
+      { x: 0, y: 0.3 },
       { x: Math.PI / 2, y: 1 },
       { x: Math.PI, y: 0 },
     ] as const;
@@ -51,7 +52,8 @@ const LEVEL_BUILDERS: Record<LevelType, LevelBuilder> = {
       { x: -Math.PI, y: -1 },
       { x: -Math.PI / 2, y: 0 },
       { x: 0, y: 1 },
-      { x: Math.PI / 2, y: 0 },
+      // Small perturbation adds challenge while preserving overall cosine structure.
+      { x: Math.PI / 2, y: 0.25 },
       { x: Math.PI, y: -1 },
     ] as const;
 
