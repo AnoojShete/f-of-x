@@ -1,11 +1,19 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import Graph from './components/Graph';
 import BallOverlay from './components/BallOverlay';
-import type { LevelCompleteResult } from './components/BallOverlay';
 import AdminPanel from './components/AdminPanel';
 import GameObjectsOverlay from './components/GameObjectsOverlay';
 import type { GameStar } from './components/GameObjectsOverlay';
+import { stepGameState, type LevelCompleteResult } from './core/game/gameState';
+import { stepDeterministicMode, stepPhysicsMode, type BallPhysicsState } from './physics/motion';
+import {
+  buildTraversalPaths,
+  chooseActiveSegmentIndex,
+  clampInitialDistance,
+  computeInitialVelocity,
+  findClosestDistanceByX,
+} from './physics/traversal';
 import { compileExpression } from './utils/evaluate';
 import { generateLevel } from './utils/levelGenerator';
 import type { LevelType } from './utils/levelGenerator';
@@ -14,11 +22,13 @@ import type { Vec2 } from './types';
 import type { GraphFunction } from './types';
 import type { GraphPlot } from './types';
 import type { LevelRecord } from './types';
+import type { Star } from './utils/collision';
 
 const CANVAS_WIDTH = 900;
 const CANVAS_HEIGHT = 520;
 const BALL_RADIUS_PX = 6;
 const ACTIVE_LEVEL_TYPE: LevelType = 'sine';
+const MAX_DT_SEC = 0.05;
 
 type GameState = 'idle' | 'playing' | 'won';
 type PhysicsSettings = {
@@ -46,6 +56,21 @@ export default function App() {
   const [levelResult, setLevelResult] = useState<LevelCompleteResult | undefined>(undefined);
   const [gameState, setGameState] = useState<GameState>('idle');
   const [resetToken, setResetToken] = useState<number>(0);
+  const [ballPosition, setBallPosition] = useState<Vec2>(level.start);
+
+  const physicsStateRef = useRef<BallPhysicsState>({
+    distance: 0,
+    velocity: 0,
+    ballWorld: level.start,
+    airVelocity: { x: 0, y: 0 },
+    motionState: 'air',
+    spawnAttachGraceSec: 0.1,
+    activeSegmentIndex: undefined,
+  });
+  const lastTimeRef = useRef<number | undefined>(undefined);
+  const runCompletedRef = useRef<boolean>(false);
+  const collectedIdsRef = useRef<Set<string>>(new Set());
+  const goalReachedRef = useRef<boolean>(false);
 
   const functions = useMemo<GraphFunction[]>(
     () => [
@@ -102,9 +127,14 @@ export default function App() {
     [level]
   );
 
-  const collisionStars = useMemo(
+  const collisionStars = useMemo<ReadonlyArray<Star>>(
     () => stars.map((s) => ({ id: s.id, x: s.position.x, y: s.position.y })),
     [stars]
+  );
+
+  const traversalPaths = useMemo(
+    () => buildTraversalPaths(plots[0]?.error ? [] : (plots[0]?.segments ?? [])),
+    [plots]
   );
 
   const collectedStarSet = useMemo(() => new Set(collectedStarIds), [collectedStarIds]);
@@ -115,17 +145,27 @@ export default function App() {
     setCollectedStarIds([]);
     setLevelResult(undefined);
     setCameraCenter({ x: 0, y: 0 });
+    setBallPosition(startPoint);
+    collectedIdsRef.current = new Set();
+    goalReachedRef.current = false;
+    runCompletedRef.current = false;
+    lastTimeRef.current = undefined;
     setResetToken((v) => v + 1);
     setGameState('playing');
-  }, []);
+  }, [startPoint]);
 
   const restartGame = useCallback(() => {
     setCollectedStarIds([]);
     setLevelResult(undefined);
     setCameraCenter({ x: 0, y: 0 });
+    setBallPosition(startPoint);
+    collectedIdsRef.current = new Set();
+    goalReachedRef.current = false;
+    runCompletedRef.current = false;
+    lastTimeRef.current = undefined;
     setResetToken((v) => v + 1);
     setGameState('idle');
-  }, []);
+  }, [startPoint]);
 
   const handleLevelComplete = useCallback((result: LevelCompleteResult) => {
     setLevelResult(result);
@@ -142,6 +182,113 @@ export default function App() {
     },
     [isCameraFollowEnabled]
   );
+
+  useEffect(() => {
+    const activeSegmentIndex = chooseActiveSegmentIndex(traversalPaths, startPoint);
+    const activePath = activeSegmentIndex == null ? undefined : traversalPaths[activeSegmentIndex];
+    const startDistance = activePath
+      ? (startPoint ? findClosestDistanceByX(activePath, startPoint.x) : clampInitialDistance(activePath))
+      : 0;
+    const launchMagnitude = Math.max(0, physicsSettings.initialVelocity);
+
+    physicsStateRef.current = {
+      distance: startDistance,
+      velocity: activePath ? computeInitialVelocity(activePath, startDistance, launchMagnitude) : launchMagnitude,
+      ballWorld: startPoint,
+      airVelocity: { x: 0, y: 0 },
+      motionState: 'air',
+      spawnAttachGraceSec: 0.1,
+      activeSegmentIndex,
+    };
+
+    setBallPosition(startPoint);
+    lastTimeRef.current = undefined;
+    runCompletedRef.current = false;
+  }, [traversalPaths, startPoint, resetToken, physicsSettings.initialVelocity]);
+
+  useEffect(() => {
+    if (traversalPaths.length === 0) return;
+
+    let rafId = 0;
+
+    const tick = (now: number) => {
+      const previousTime = lastTimeRef.current;
+      lastTimeRef.current = now;
+
+      const rawDt = previousTime == null ? 0 : (now - previousTime) / 1000;
+      const dt = Math.min(MAX_DT_SEC, Math.max(0, Number.isFinite(rawDt) ? rawDt : 0));
+      const deterministicDt = dt > 0 ? dt : 1 / 60;
+
+      if (gameState === 'playing' && !runCompletedRef.current) {
+        const speedScale = Math.max(0, physicsSettings.speedMultiplier);
+        const maxVelocity = Math.max(80, 220 * 3) * Math.max(1, speedScale);
+
+        const current = physicsStateRef.current;
+        const next = isPhysicsEnabled
+          ? stepPhysicsMode({
+              dt,
+              paths: traversalPaths,
+              scale,
+              speedScale,
+              radiusPx: BALL_RADIUS_PX,
+              gravityPxPerSec2: physicsSettings.gravity,
+              frictionPerSec: physicsSettings.friction,
+              maxVelocity,
+              state: current,
+            })
+          : stepDeterministicMode({
+              dt: deterministicDt,
+              paths: traversalPaths,
+              scale,
+              speedPxPerSec: 220,
+              speedScale,
+              state: current,
+            });
+
+        physicsStateRef.current = next;
+        setBallPosition(next.ballWorld);
+        handleBallPositionChange(next.ballWorld);
+
+        const gameStep = stepGameState({
+          ballPosition: next.ballWorld,
+          stars: collisionStars,
+          starThreshold: 0.25,
+          goal: goalForCollision,
+          goalThreshold: 0.25,
+          snapshot: {
+            collectedIds: collectedIdsRef.current,
+            goalReached: goalReachedRef.current,
+          },
+        });
+
+        if (gameStep.newlyCollectedIds.length > 0) {
+          collectedIdsRef.current = new Set(gameStep.collectedIds);
+          setCollectedStarIds([...collectedIdsRef.current]);
+        }
+
+        if (gameStep.completed && gameStep.levelResult) {
+          goalReachedRef.current = gameStep.goalReached;
+          runCompletedRef.current = true;
+          handleLevelComplete(gameStep.levelResult);
+        }
+      }
+
+      rafId = requestAnimationFrame(tick);
+    };
+
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [
+    traversalPaths,
+    gameState,
+    isPhysicsEnabled,
+    scale,
+    physicsSettings,
+    collisionStars,
+    goalForCollision,
+    handleBallPositionChange,
+    handleLevelComplete,
+  ]);
 
   return (
     <div style={{ padding: 16, display: 'grid', gap: 12 }}>
@@ -324,21 +471,8 @@ export default function App() {
           height={CANVAS_HEIGHT}
           scale={scale}
           cameraCenter={cameraCenter}
-          segments={plots[0]?.error ? [] : (plots[0]?.segments ?? [])}
-          isPlaying={gameState === 'playing'}
-          isPhysicsEnabled={isPhysicsEnabled}
-          resetToken={resetToken}
+          ballPosition={ballPosition}
           radiusPx={BALL_RADIUS_PX}
-          startPoint={startPoint}
-          gravityPxPerSec2={physicsSettings.gravity}
-          frictionPerSec={physicsSettings.friction}
-          initialVelocityPxPerSec={physicsSettings.initialVelocity}
-          speedMultiplier={physicsSettings.speedMultiplier}
-          stars={collisionStars}
-          onLevelComplete={handleLevelComplete}
-          onBallPositionChange={handleBallPositionChange}
-          onCollectedStarsChange={setCollectedStarIds}
-          {...(goalForCollision ? { goal: goalForCollision } : {})}
         />
       </Graph>
 
