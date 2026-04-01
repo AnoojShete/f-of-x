@@ -18,3 +18,12 @@ export type GraphPlot = GraphFunction & {
 export type Goal = Readonly<{ x: number; y: number }>;
 
 export type Star = Readonly<{ id: string; x: number; y: number }>;
+
+export type LevelRecord = Readonly<{
+  id: string;
+  type: 'sine' | 'custom';
+  start: Vec2;
+  goal: Vec2;
+  stars: ReadonlyArray<Vec2>;
+  solution?: string;
+}>;
