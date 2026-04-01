@@ -71,7 +71,6 @@ export type BallOverlayProps = {
 
 type PathSample = {
   worldPoints: ReadonlyArray<Vec2>; // world-space points
-  canvasPoints: ReadonlyArray<Vec2>; // canvas-space points
   cumulative: Float64Array; // cumulative arc length at each point
   totalLength: number;
 };
@@ -94,11 +93,12 @@ type CurveHit = {
 const GRAVITY_ALONG_PATH_PX_PER_SEC2 = 420;
 const MAX_DT_SEC = 0.05;
 const FRICTION_PER_SEC = 0.58;
-const INITIAL_DISTANCE_PX = 14;
+const INITIAL_DISTANCE_WORLD = 0;
 const INITIAL_IMPULSE_PX_PER_SEC = 100;
 const STATIC_VELOCITY_EPSILON = 0.01;
+const SPAWN_ATTACH_GRACE_SEC = 0.1;
 
-function buildPath(segments: ReadonlyArray<GraphSegment>, width: number, height: number, scale: number): PathSample | undefined {
+function buildPath(segments: ReadonlyArray<GraphSegment>): PathSample | undefined {
   // Prefer the longest continuous segment to avoid jumping across discontinuities.
   let best: GraphSegment | undefined;
   let bestScore = 0;
@@ -115,15 +115,14 @@ function buildPath(segments: ReadonlyArray<GraphSegment>, width: number, height:
   if (!best || best.length < 2) return undefined;
 
   const worldPoints: Vec2[] = [...best];
-  const canvasPoints: Vec2[] = worldPoints.map((p) => worldToCanvas(p, width, height, scale));
   const cumulative = new Float64Array(worldPoints.length);
 
   let total = 0;
   cumulative[0] = 0;
 
-  for (let i = 1; i < canvasPoints.length; i++) {
-    const a = canvasPoints[i - 1]!;
-    const b = canvasPoints[i]!;
+  for (let i = 1; i < worldPoints.length; i++) {
+    const a = worldPoints[i - 1]!;
+    const b = worldPoints[i]!;
     const dx = b.x - a.x;
     const dy = b.y - a.y;
     total += Math.hypot(dx, dy);
@@ -132,7 +131,7 @@ function buildPath(segments: ReadonlyArray<GraphSegment>, width: number, height:
 
   if (total <= 0 || !Number.isFinite(total)) return undefined;
 
-  return { worldPoints, canvasPoints, cumulative, totalLength: total };
+  return { worldPoints, cumulative, totalLength: total };
 }
 
 function findSegmentIndex(cumulative: Float64Array, distance: number): number {
@@ -158,7 +157,7 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 function clampInitialDistance(path: PathSample): number {
-  return clamp(INITIAL_DISTANCE_PX, 0, path.totalLength);
+  return clamp(INITIAL_DISTANCE_WORLD, 0, path.totalLength);
 }
 
 function findClosestDistanceByX(path: PathSample, targetX: number): number {
@@ -344,16 +343,17 @@ export default function BallOverlay({
   const collectedStarsRef = useRef<Set<string>>(new Set());
   const goalReachedRef = useRef<boolean>(false);
   const velocityRef = useRef<number>(INITIAL_IMPULSE_PX_PER_SEC);
-  const distanceRef = useRef<number>(INITIAL_DISTANCE_PX);
+  const distanceRef = useRef<number>(INITIAL_DISTANCE_WORLD);
   const lastTimeRef = useRef<number | undefined>(undefined);
-  const previousDistanceRef = useRef<number>(INITIAL_DISTANCE_PX);
+  const previousDistanceRef = useRef<number>(INITIAL_DISTANCE_WORLD);
   const rotationRef = useRef<number>(0);
   const completedRef = useRef<boolean>(false);
   const motionStateRef = useRef<MotionState>('air');
   const ballWorldRef = useRef<Vec2>({ x: 0, y: 0 });
   const airVelocityRef = useRef<Vec2>({ x: 0, y: 0 });
+  const spawnAttachGraceRef = useRef<number>(SPAWN_ATTACH_GRACE_SEC);
 
-  const path = useMemo(() => buildPath(segments, width, height, scale), [segments, width, height, scale]);
+  const path = useMemo(() => buildPath(segments), [segments]);
 
   // Reset collision state when the path changes (e.g. expression or scale changes).
   useEffect(() => {
@@ -362,7 +362,7 @@ export default function BallOverlay({
     completedRef.current = false;
     const startDistance = path
       ? (startPoint ? findClosestDistanceByX(path, startPoint.x) : clampInitialDistance(path))
-      : INITIAL_DISTANCE_PX;
+      : INITIAL_DISTANCE_WORLD;
 
     const startWorld: Vec2 = startPoint
       ? { x: startPoint.x, y: startPoint.y }
@@ -374,24 +374,11 @@ export default function BallOverlay({
     velocityRef.current = path ? computeInitialVelocity(path, startDistance, launchMagnitude) : launchMagnitude;
     ballWorldRef.current = startWorld;
     airVelocityRef.current = { x: 0, y: 0 };
+    spawnAttachGraceRef.current = SPAWN_ATTACH_GRACE_SEC;
 
-    if (path) {
-      const hit = findClosestCurveHit(path, startWorld);
-      const contactThresholdWorld = (radiusPx + 1) / Math.max(1, scale);
-      if (hit && hit.distanceWorld <= contactThresholdWorld) {
-        motionStateRef.current = 'onCurve';
-        distanceRef.current = hit.arcDistance;
-        previousDistanceRef.current = hit.arcDistance;
-        ballWorldRef.current = hit.point;
-        velocityRef.current = computeInitialVelocity(path, hit.arcDistance, launchMagnitude);
-      } else {
-        motionStateRef.current = 'air';
-        velocityRef.current = 0;
-      }
-    } else {
-      motionStateRef.current = 'air';
-      velocityRef.current = 0;
-    }
+    // Spawn always starts in air; contact with the curve must be earned by motion.
+    motionStateRef.current = 'air';
+    velocityRef.current = 0;
 
     rotationRef.current = 0;
     lastTimeRef.current = undefined;
@@ -447,6 +434,10 @@ export default function BallOverlay({
               y: airVelocity.y + gravityWorldPerSec2 * dt * speedScale,
             };
 
+            if (spawnAttachGraceRef.current > 0) {
+              spawnAttachGraceRef.current = Math.max(0, spawnAttachGraceRef.current - dt);
+            }
+
             ballWorld = {
               x: ballWorld.x + airVelocity.x * dt * speedScale,
               y: ballWorld.y + airVelocity.y * dt * speedScale,
@@ -454,7 +445,8 @@ export default function BallOverlay({
 
             const hit = findClosestCurveHit(path, ballWorld);
             const contactThresholdWorld = (radiusPx + 1) / Math.max(1, scale);
-            if (hit && hit.distanceWorld <= contactThresholdWorld) {
+            const canAttachFromSpawnRules = spawnAttachGraceRef.current <= 0 || airVelocity.y < -1e-6;
+            if (canAttachFromSpawnRules && hit && hit.distanceWorld <= contactThresholdWorld) {
               state = 'onCurve';
               distance = hit.arcDistance;
               ballWorld = hit.point;
@@ -479,7 +471,7 @@ export default function BallOverlay({
             }
 
             velocity = clamp(Number.isFinite(velocity) ? velocity : 0, -maxVelocity, maxVelocity);
-            distance = clamp(distance + velocity * speedScale * dt, 0, path.totalLength);
+            distance = clamp(distance + (velocity * speedScale * dt) / Math.max(1, scale), 0, path.totalLength);
 
             const nextSample = getPathSampleAtDistance(path, distance);
             ballWorld = nextSample.point;
@@ -497,7 +489,7 @@ export default function BallOverlay({
           }
         } else {
           const deterministicSpeed = Math.max(0, speedPxPerSec * speedScale);
-          distance = clamp(distance + deterministicSpeed * dt, 0, path.totalLength);
+          distance = clamp(distance + (deterministicSpeed * dt) / Math.max(1, scale), 0, path.totalLength);
           velocity = deterministicSpeed;
 
           const sample = getPathSampleAtDistance(path, distance);
@@ -515,7 +507,7 @@ export default function BallOverlay({
 
       const previousDistance = previousDistanceRef.current;
       if (state === 'onCurve') {
-        const distanceDelta = distance - previousDistance;
+        const distanceDelta = (distance - previousDistance) * scale;
         previousDistanceRef.current = distance;
         if (radiusPx > 1e-6 && Number.isFinite(distanceDelta)) {
           rotationRef.current += distanceDelta / radiusPx;

@@ -12,8 +12,14 @@ export type SamplingOptions = {
 
   // Discontinuity heuristics
   maxAbsYUnits: number;
-  maxPixelJump: number;
+  /** @deprecated kept for backward compatibility; no longer used for discontinuity splitting */
+  maxPixelJump?: number;
+  maxWorldDyJump?: number;
+  maxAbsSlope?: number;
 };
+
+const DEFAULT_MAX_WORLD_DY_JUMP = 5;
+const DEFAULT_MAX_ABS_SLOPE = 14;
 
 function pushPoint(segments: Vec2[][], p: Vec2) {
   const lastSegment = segments[segments.length - 1];
@@ -30,10 +36,13 @@ function startNewSegment(segments: Vec2[][]) {
  * The output is split into segments to avoid connecting across discontinuities:
  * - undefined/non-finite y (NaN, Infinity)
  * - extremely large values
- * - large pixel jumps between consecutive samples
+ * - large world-space jumps between consecutive samples
+ * - extreme local slope (near-vertical behavior such as tan asymptotes)
  */
 export function sampleCompiledFunction(compiled: CompiledExpression, opts: SamplingOptions): ReadonlyArray<GraphSegment> {
   const stepUnits = Math.max(0.0005, opts.stepPx / opts.scale);
+  const maxWorldDyJump = opts.maxWorldDyJump ?? DEFAULT_MAX_WORLD_DY_JUMP;
+  const maxAbsSlope = opts.maxAbsSlope ?? DEFAULT_MAX_ABS_SLOPE;
 
   const segments: Vec2[][] = [];
   startNewSegment(segments);
@@ -65,8 +74,11 @@ export function sampleCompiledFunction(compiled: CompiledExpression, opts: Sampl
     const p: Vec2 = { x, y };
 
     if (prev) {
-      const dyPx = Math.abs((p.y - prev.y) * opts.scale);
-      if (dyPx > opts.maxPixelJump) {
+      const dy = Math.abs(p.y - prev.y);
+      const dx = Math.abs(p.x - prev.x);
+      const slope = dx > 1e-12 ? dy / dx : Number.POSITIVE_INFINITY;
+
+      if (dy > maxWorldDyJump || slope > maxAbsSlope) {
         prev = undefined;
         startNewSegment(segments);
       }
