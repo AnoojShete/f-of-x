@@ -13,6 +13,7 @@ import {
   clampInitialDistance,
   computeInitialVelocity,
   findClosestDistanceByX,
+  getPathSampleAtDistance,
 } from './physics/traversal';
 import { compileExpression } from './utils/evaluate';
 import { generateLevel } from './utils/levelGenerator';
@@ -57,6 +58,8 @@ export default function App() {
   const [gameState, setGameState] = useState<GameState>('idle');
   const [resetToken, setResetToken] = useState<number>(0);
   const [ballPosition, setBallPosition] = useState<Vec2>(level.start);
+  const [ballTangent, setBallTangent] = useState<Vec2>({ x: 1, y: 0 });
+  const [isBallOnCurve, setIsBallOnCurve] = useState<boolean>(false);
 
   const physicsStateRef = useRef<BallPhysicsState>({
     distance: 0,
@@ -141,31 +144,41 @@ export default function App() {
   const allStarsCollected = stars.length > 0 && collectedStarIds.length >= stars.length;
   const goalForCollision = allStarsCollected ? goal : undefined;
 
+  const resetBallToLevelStart = useCallback(() => {
+    setBallPosition(startPoint);
+    setIsBallOnCurve(false);
+    setBallTangent({ x: 1, y: 0 });
+  }, [startPoint]);
+
   const startGame = useCallback(() => {
     setCollectedStarIds([]);
     setLevelResult(undefined);
     setCameraCenter({ x: 0, y: 0 });
-    setBallPosition(startPoint);
+    resetBallToLevelStart();
     collectedIdsRef.current = new Set();
     goalReachedRef.current = false;
     runCompletedRef.current = false;
     lastTimeRef.current = undefined;
     setResetToken((v) => v + 1);
     setGameState('playing');
-  }, [startPoint]);
+  }, [resetBallToLevelStart]);
 
   const restartGame = useCallback(() => {
     setCollectedStarIds([]);
     setLevelResult(undefined);
     setCameraCenter({ x: 0, y: 0 });
-    setBallPosition(startPoint);
+    resetBallToLevelStart();
     collectedIdsRef.current = new Set();
     goalReachedRef.current = false;
     runCompletedRef.current = false;
     lastTimeRef.current = undefined;
     setResetToken((v) => v + 1);
     setGameState('idle');
-  }, [startPoint]);
+  }, [resetBallToLevelStart]);
+
+  useEffect(() => {
+    resetBallToLevelStart();
+  }, [resetBallToLevelStart]);
 
   const handleLevelComplete = useCallback((result: LevelCompleteResult) => {
     setLevelResult(result);
@@ -201,7 +214,6 @@ export default function App() {
       activeSegmentIndex,
     };
 
-    setBallPosition(startPoint);
     lastTimeRef.current = undefined;
     runCompletedRef.current = false;
   }, [traversalPaths, startPoint, resetToken, physicsSettings.initialVelocity]);
@@ -247,6 +259,15 @@ export default function App() {
 
         physicsStateRef.current = next;
         setBallPosition(next.ballWorld);
+        const onCurve = next.motionState === 'onCurve';
+        setIsBallOnCurve(onCurve);
+        if (onCurve) {
+          const tangentPath = next.activeSegmentIndex == null ? undefined : traversalPaths[next.activeSegmentIndex];
+          if (tangentPath) {
+            const sample = getPathSampleAtDistance(tangentPath, next.distance);
+            setBallTangent(sample.tangent);
+          }
+        }
         handleBallPositionChange(next.ballWorld);
 
         const gameStep = stepGameState({
@@ -472,6 +493,8 @@ export default function App() {
           scale={scale}
           cameraCenter={cameraCenter}
           ballPosition={ballPosition}
+          tangent={ballTangent}
+          isOnCurve={isBallOnCurve}
           radiusPx={BALL_RADIUS_PX}
         />
       </Graph>
