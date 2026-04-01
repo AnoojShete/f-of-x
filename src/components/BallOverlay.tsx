@@ -76,6 +76,21 @@ type PathSample = {
   totalLength: number;
 };
 
+type MotionState = 'air' | 'onCurve';
+
+type PathSampleAtDistance = {
+  point: Vec2;
+  tangent: Vec2;
+  distance: number;
+};
+
+type CurveHit = {
+  point: Vec2;
+  tangent: Vec2;
+  distanceWorld: number;
+  arcDistance: number;
+};
+
 const GRAVITY_ALONG_PATH_PX_PER_SEC2 = 420;
 const MAX_DT_SEC = 0.05;
 const FRICTION_PER_SEC = 0.58;
@@ -192,6 +207,76 @@ function ensureNonDegenerateSegmentIndex(path: PathSample, index: number): numbe
   return 0;
 }
 
+function dot(a: Vec2, b: Vec2): number {
+  return a.x * b.x + a.y * b.y;
+}
+
+function getPathSampleAtDistance(path: PathSample, rawDistance: number): PathSampleAtDistance {
+  const distance = clamp(rawDistance, 0, path.totalLength);
+  const i = ensureNonDegenerateSegmentIndex(path, findSegmentIndex(path.cumulative, distance));
+  const a = path.worldPoints[i]!;
+  const b = path.worldPoints[Math.min(i + 1, path.worldPoints.length - 1)]!;
+  const d0 = path.cumulative[i]!;
+  const d1 = path.cumulative[Math.min(i + 1, path.cumulative.length - 1)]!;
+  const span = d1 - d0;
+  const t = span > 0 ? clamp((distance - d0) / span, 0, 1) : 0;
+
+  const point: Vec2 = { x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t) };
+  const tangent = getTangentFromNeighbors(path, distance);
+  return { point, tangent, distance };
+}
+
+function closestPointOnSegment(p: Vec2, a: Vec2, b: Vec2): { point: Vec2; t: number; distance: number } {
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const apx = p.x - a.x;
+  const apy = p.y - a.y;
+  const ab2 = abx * abx + aby * aby;
+  if (!(ab2 > 1e-12) || !Number.isFinite(ab2)) {
+    const dx = p.x - a.x;
+    const dy = p.y - a.y;
+    return { point: a, t: 0, distance: Math.hypot(dx, dy) };
+  }
+
+  const t = clamp((apx * abx + apy * aby) / ab2, 0, 1);
+  const q: Vec2 = { x: a.x + abx * t, y: a.y + aby * t };
+  const dx = p.x - q.x;
+  const dy = p.y - q.y;
+  return { point: q, t, distance: Math.hypot(dx, dy) };
+}
+
+function findClosestCurveHit(path: PathSample, ball: Vec2): CurveHit | undefined {
+  if (path.worldPoints.length < 2) return undefined;
+
+  let best: CurveHit | undefined;
+
+  for (let i = 0; i < path.worldPoints.length - 1; i++) {
+    const a = path.worldPoints[i]!;
+    const b = path.worldPoints[i + 1]!;
+    const hit = closestPointOnSegment(ball, a, b);
+
+    // Surface candidate should be at or below the ball center in world-space.
+    if (hit.point.y > ball.y + 1e-6) continue;
+
+    if (!best || hit.distance < best.distanceWorld) {
+      const segPxLength = path.cumulative[i + 1]! - path.cumulative[i]!;
+      const arcDistance = path.cumulative[i]! + segPxLength * hit.t;
+      const tanRaw: Vec2 = { x: b.x - a.x, y: b.y - a.y };
+      const tanLen = Math.hypot(tanRaw.x, tanRaw.y);
+      const tangent = tanLen > 1e-8 ? { x: tanRaw.x / tanLen, y: tanRaw.y / tanLen } : { x: 1, y: 0 };
+
+      best = {
+        point: hit.point,
+        tangent,
+        distanceWorld: hit.distance,
+        arcDistance: clamp(arcDistance, 0, path.totalLength),
+      };
+    }
+  }
+
+  return best;
+}
+
 function getTangentFromNeighbors(path: PathSample, distance: number): Vec2 {
   const count = path.worldPoints.length;
   if (count < 2) return { x: 1, y: 0 };
@@ -264,6 +349,9 @@ export default function BallOverlay({
   const previousDistanceRef = useRef<number>(INITIAL_DISTANCE_PX);
   const rotationRef = useRef<number>(0);
   const completedRef = useRef<boolean>(false);
+  const motionStateRef = useRef<MotionState>('air');
+  const ballWorldRef = useRef<Vec2>({ x: 0, y: 0 });
+  const airVelocityRef = useRef<Vec2>({ x: 0, y: 0 });
 
   const path = useMemo(() => buildPath(segments, width, height, scale), [segments, width, height, scale]);
 
@@ -275,14 +363,40 @@ export default function BallOverlay({
     const startDistance = path
       ? (startPoint ? findClosestDistanceByX(path, startPoint.x) : clampInitialDistance(path))
       : INITIAL_DISTANCE_PX;
+
+    const startWorld: Vec2 = startPoint
+      ? { x: startPoint.x, y: startPoint.y }
+      : (path ? path.worldPoints[0]! : { x: 0, y: 0 });
+
     distanceRef.current = startDistance;
     previousDistanceRef.current = startDistance;
     const launchMagnitude = Math.max(0, initialVelocityPxPerSec);
     velocityRef.current = path ? computeInitialVelocity(path, startDistance, launchMagnitude) : launchMagnitude;
+    ballWorldRef.current = startWorld;
+    airVelocityRef.current = { x: 0, y: 0 };
+
+    if (path) {
+      const hit = findClosestCurveHit(path, startWorld);
+      const contactThresholdWorld = (radiusPx + 1) / Math.max(1, scale);
+      if (hit && hit.distanceWorld <= contactThresholdWorld) {
+        motionStateRef.current = 'onCurve';
+        distanceRef.current = hit.arcDistance;
+        previousDistanceRef.current = hit.arcDistance;
+        ballWorldRef.current = hit.point;
+        velocityRef.current = computeInitialVelocity(path, hit.arcDistance, launchMagnitude);
+      } else {
+        motionStateRef.current = 'air';
+        velocityRef.current = 0;
+      }
+    } else {
+      motionStateRef.current = 'air';
+      velocityRef.current = 0;
+    }
+
     rotationRef.current = 0;
     lastTimeRef.current = undefined;
     onCollectedStarsChange?.([]);
-  }, [path, startPoint, onCollectedStarsChange, resetToken, initialVelocityPxPerSec]);
+  }, [path, startPoint, onCollectedStarsChange, resetToken, initialVelocityPxPerSec, radiusPx, scale]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -318,68 +432,112 @@ export default function BallOverlay({
 
       let distance = clamp(distanceRef.current, 0, path.totalLength);
       let velocity = Number.isFinite(velocityRef.current) ? velocityRef.current : 0;
+      let ballWorld = ballWorldRef.current;
+      const previousBallWorld = ballWorldRef.current;
+      let airVelocity = airVelocityRef.current;
+      let state = motionStateRef.current;
 
       if (isPlaying && dt > 0) {
         if (isPhysicsEnabled) {
-          const tangent = getTangentFromNeighbors(path, distance);
-          const projectedGravity = 0 * tangent.x + -1 * tangent.y;
-          const acceleration = projectedGravity * gravityPxPerSec2;
+          const gravityWorldPerSec2 = -Math.max(0, gravityPxPerSec2) / Math.max(1, scale);
 
-          if (Number.isFinite(acceleration)) {
-            velocity += acceleration * dt;
+          if (state === 'air') {
+            airVelocity = {
+              x: airVelocity.x,
+              y: airVelocity.y + gravityWorldPerSec2 * dt * speedScale,
+            };
+
+            ballWorld = {
+              x: ballWorld.x + airVelocity.x * dt * speedScale,
+              y: ballWorld.y + airVelocity.y * dt * speedScale,
+            };
+
+            const hit = findClosestCurveHit(path, ballWorld);
+            const contactThresholdWorld = (radiusPx + 1) / Math.max(1, scale);
+            if (hit && hit.distanceWorld <= contactThresholdWorld) {
+              state = 'onCurve';
+              distance = hit.arcDistance;
+              ballWorld = hit.point;
+
+              const surfaceVelocityFromAir = dot(airVelocity, hit.tangent) * scale;
+              velocity = clamp(surfaceVelocityFromAir, -maxVelocity, maxVelocity);
+            }
+          } else {
+            const surfaceSample = getPathSampleAtDistance(path, distance);
+            const projectedGravity = dot({ x: 0, y: -1 }, surfaceSample.tangent);
+            const acceleration = projectedGravity * gravityPxPerSec2;
+
+            if (Number.isFinite(acceleration)) {
+              velocity += acceleration * dt;
+            }
+
+            const frictionFactor = Math.exp(-Math.max(0, frictionPerSec) * dt);
+            velocity *= frictionFactor;
+
+            if (Math.abs(velocity) < STATIC_VELOCITY_EPSILON) {
+              velocity = 0;
+            }
+
+            velocity = clamp(Number.isFinite(velocity) ? velocity : 0, -maxVelocity, maxVelocity);
+            distance = clamp(distance + velocity * speedScale * dt, 0, path.totalLength);
+
+            const nextSample = getPathSampleAtDistance(path, distance);
+            ballWorld = nextSample.point;
+
+            const atStartEdge = distance <= 0.0001 && velocity < 0;
+            const atEndEdge = distance >= path.totalLength - 0.0001 && velocity > 0;
+
+            if (atStartEdge || atEndEdge) {
+              state = 'air';
+              airVelocity = {
+                x: nextSample.tangent.x * (velocity / Math.max(1, scale)),
+                y: nextSample.tangent.y * (velocity / Math.max(1, scale)),
+              };
+            }
           }
-
-          // Exponential damping keeps friction smooth across variable frame times.
-          const frictionFactor = Math.exp(-Math.max(0, frictionPerSec) * dt);
-          velocity *= frictionFactor;
-
-          if (Math.abs(velocity) < STATIC_VELOCITY_EPSILON) {
-            velocity = 0;
-          }
-
-          velocity = clamp(Number.isFinite(velocity) ? velocity : 0, -maxVelocity, maxVelocity);
-          distance = clamp(distance + velocity * speedScale * dt, 0, path.totalLength);
         } else {
           const deterministicSpeed = Math.max(0, speedPxPerSec * speedScale);
           distance = clamp(distance + deterministicSpeed * dt, 0, path.totalLength);
           velocity = deterministicSpeed;
+
+          const sample = getPathSampleAtDistance(path, distance);
+          ballWorld = sample.point;
+          state = 'onCurve';
+          airVelocity = { x: 0, y: 0 };
         }
       }
 
       velocityRef.current = velocity;
       distanceRef.current = distance;
+      ballWorldRef.current = ballWorld;
+      airVelocityRef.current = airVelocity;
+      motionStateRef.current = state;
 
       const previousDistance = previousDistanceRef.current;
-      const distanceDelta = distance - previousDistance;
-      previousDistanceRef.current = distance;
-      if (radiusPx > 1e-6 && Number.isFinite(distanceDelta)) {
-        rotationRef.current += distanceDelta / radiusPx;
+      if (state === 'onCurve') {
+        const distanceDelta = distance - previousDistance;
+        previousDistanceRef.current = distance;
+        if (radiusPx > 1e-6 && Number.isFinite(distanceDelta)) {
+          rotationRef.current += distanceDelta / radiusPx;
+        }
+      } else {
+        const travelPx = Math.hypot(ballWorld.x - previousBallWorld.x, ballWorld.y - previousBallWorld.y) * scale;
+        if (radiusPx > 1e-6 && Number.isFinite(travelPx)) {
+          rotationRef.current += travelPx / radiusPx;
+        }
+        previousDistanceRef.current = distance;
       }
 
-      const i = ensureNonDegenerateSegmentIndex(path, findSegmentIndex(path.cumulative, distance));
-      const aWorld = path.worldPoints[i]!;
-      const bWorld = path.worldPoints[Math.min(i + 1, path.worldPoints.length - 1)]!;
-      const d0 = path.cumulative[i]!;
-      const d1 = path.cumulative[Math.min(i + 1, path.cumulative.length - 1)]!;
-
-      const span = d1 - d0;
-      const t = span > 0 ? clamp((distance - d0) / span, 0, 1) : 0;
-
-      const tangent = getTangentFromNeighbors(path, distance);
-      const ballWorldOnCurve: Vec2 = {
-        x: lerp(aWorld.x, bWorld.x, t),
-        y: lerp(aWorld.y, bWorld.y, t),
-      };
-      const ballWorldOffset = offsetWorldPointByNormal(ballWorldOnCurve, tangent, radiusPx, scale);
+      const tangentForRender = getTangentFromNeighbors(path, distance);
+      const ballWorldOffset = state === 'onCurve'
+        ? offsetWorldPointByNormal(ballWorld, tangentForRender, radiusPx, scale)
+        : ballWorld;
       const { x, y } = worldToCanvas(ballWorldOffset, width, height, scale);
 
-      const ballWorld: Vec2 = {
-        x: ballWorldOnCurve.x,
-        y: ballWorldOnCurve.y,
-      };
+      const collisionPoint: Vec2 = { x: ballWorld.x, y: ballWorld.y };
 
       // Collision logic (pure + modular): goal + star collection.
-      if (isPlaying && goal && !goalReachedRef.current && checkGoalCollision(ballWorld, goal, goalThreshold)) {
+      if (isPlaying && goal && !goalReachedRef.current && checkGoalCollision(collisionPoint, goal, goalThreshold)) {
         goalReachedRef.current = true;
         completedRef.current = true;
 
@@ -397,7 +555,7 @@ export default function BallOverlay({
 
       if (isPlaying && !completedRef.current && stars.length > 0) {
         const collected = collectedStarsRef.current;
-        const { newlyCollectedIds } = collectStars(ballWorld, stars, collected, starThreshold);
+        const { newlyCollectedIds } = collectStars(collisionPoint, stars, collected, starThreshold);
         if (newlyCollectedIds.length > 0) {
           for (const id of newlyCollectedIds) {
             collected.add(id);
@@ -427,9 +585,9 @@ export default function BallOverlay({
       ctx.restore();
 
       if (debugVectors) {
-        const centerCanvas = worldToCanvas(ballWorldOnCurve, width, height, scale);
-        const tangentCanvas = { x: tangent.x, y: -tangent.y };
-        const normalWorld = upwardNormalFromTangent(tangent);
+        const centerCanvas = worldToCanvas(collisionPoint, width, height, scale);
+        const tangentCanvas = { x: tangentForRender.x, y: -tangentForRender.y };
+        const normalWorld = upwardNormalFromTangent(tangentForRender);
         const normalCanvas = { x: normalWorld.x, y: -normalWorld.y };
 
         ctx.save();
@@ -480,6 +638,7 @@ export default function BallOverlay({
     isPhysicsEnabled,
     gravityPxPerSec2,
     frictionPerSec,
+    initialVelocityPxPerSec,
     speedMultiplier,
     debugVectors,
   ]);
