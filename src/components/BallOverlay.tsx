@@ -471,9 +471,12 @@ export default function BallOverlay({
 
       const rawDt = previousTime == null ? 0 : (now - previousTime) / 1000;
       const dt = clamp(Number.isFinite(rawDt) ? rawDt : 0, 0, MAX_DT_SEC);
+      const deterministicDt = dt > 0 ? dt : 1 / 60;
 
       const activeSegmentIndex = activeSegmentIndexRef.current;
-      const activePath = activeSegmentIndex == null ? undefined : paths[activeSegmentIndex];
+      const fallbackSegmentIndex = paths.length > 0 ? 0 : undefined;
+      const resolvedSegmentIndex = activeSegmentIndex ?? fallbackSegmentIndex;
+      const activePath = resolvedSegmentIndex == null ? undefined : paths[resolvedSegmentIndex];
       let distance = activePath ? clamp(distanceRef.current, 0, activePath.totalLength) : distanceRef.current;
       let velocity = Number.isFinite(velocityRef.current) ? velocityRef.current : 0;
       let ballWorld = ballWorldRef.current;
@@ -481,88 +484,88 @@ export default function BallOverlay({
       let airVelocity = airVelocityRef.current;
       let state = motionStateRef.current;
 
-      if (isPlaying && dt > 0) {
+      if (isPlaying) {
         if (isPhysicsEnabled) {
-          const gravityWorldPerSec2 = -Math.max(0, gravityPxPerSec2) / Math.max(1, scale);
+          if (dt > 0) {
+            const gravityWorldPerSec2 = -Math.max(0, gravityPxPerSec2) / Math.max(1, scale);
 
-          if (state === 'air') {
-            airVelocity = {
-              x: airVelocity.x,
-              y: airVelocity.y + gravityWorldPerSec2 * dt * speedScale,
-            };
-
-            if (spawnAttachGraceRef.current > 0) {
-              spawnAttachGraceRef.current = Math.max(0, spawnAttachGraceRef.current - dt);
-            }
-
-            ballWorld = {
-              x: ballWorld.x + airVelocity.x * dt * speedScale,
-              y: ballWorld.y + airVelocity.y * dt * speedScale,
-            };
-
-            const hit = activePath ? findClosestCurveHit(activePath, ballWorld) : undefined;
-            const contactThresholdWorld = (radiusPx + 1) / Math.max(1, scale);
-            const canAttachFromSpawnRules = spawnAttachGraceRef.current <= 0 || airVelocity.y < -1e-6;
-            if (canAttachFromSpawnRules && hit && hit.distanceWorld <= contactThresholdWorld) {
-              state = 'onCurve';
-              distance = hit.arcDistance;
-              ballWorld = hit.point;
-
-              const surfaceVelocityFromAir = dot(airVelocity, hit.tangent) * scale;
-              velocity = clamp(surfaceVelocityFromAir, -maxVelocity, maxVelocity);
-            }
-          } else {
-            if (!activePath) {
-              state = 'air';
-            } else {
-            const surfaceSample = getPathSampleAtDistance(activePath, distance);
-            const projectedGravity = dot({ x: 0, y: -1 }, surfaceSample.tangent);
-            const acceleration = projectedGravity * gravityPxPerSec2;
-
-            if (Number.isFinite(acceleration)) {
-              velocity += acceleration * dt;
-            }
-
-            const frictionFactor = Math.exp(-Math.max(0, frictionPerSec) * dt);
-            velocity *= frictionFactor;
-
-            if (Math.abs(velocity) < STATIC_VELOCITY_EPSILON) {
-              velocity = 0;
-            }
-
-            velocity = clamp(Number.isFinite(velocity) ? velocity : 0, -maxVelocity, maxVelocity);
-            distance = clamp(distance + (velocity * speedScale * dt) / Math.max(1, scale), 0, activePath.totalLength);
-
-            const nextSample = getPathSampleAtDistance(activePath, distance);
-            ballWorld = nextSample.point;
-
-            const atStartEdge = distance <= 0.0001 && velocity < 0;
-            const atEndEdge = distance >= activePath.totalLength - 0.0001 && velocity > 0;
-
-            if (atStartEdge || atEndEdge) {
-              state = 'air';
+            if (state === 'air') {
               airVelocity = {
-                x: nextSample.tangent.x * (velocity / Math.max(1, scale)),
-                y: nextSample.tangent.y * (velocity / Math.max(1, scale)),
+                x: airVelocity.x,
+                y: airVelocity.y + gravityWorldPerSec2 * dt * speedScale,
               };
-            }
+
+              if (spawnAttachGraceRef.current > 0) {
+                spawnAttachGraceRef.current = Math.max(0, spawnAttachGraceRef.current - dt);
+              }
+
+              ballWorld = {
+                x: ballWorld.x + airVelocity.x * dt * speedScale,
+                y: ballWorld.y + airVelocity.y * dt * speedScale,
+              };
+
+              const hit = activePath ? findClosestCurveHit(activePath, ballWorld) : undefined;
+              const contactThresholdWorld = (radiusPx + 1) / Math.max(1, scale);
+              const canAttachFromSpawnRules = spawnAttachGraceRef.current <= 0 || airVelocity.y < -1e-6;
+              if (canAttachFromSpawnRules && hit && hit.distanceWorld <= contactThresholdWorld) {
+                state = 'onCurve';
+                distance = hit.arcDistance;
+                ballWorld = hit.point;
+
+                const surfaceVelocityFromAir = dot(airVelocity, hit.tangent) * scale;
+                velocity = clamp(surfaceVelocityFromAir, -maxVelocity, maxVelocity);
+              }
+            } else {
+              if (!activePath) {
+                state = 'air';
+              } else {
+                const surfaceSample = getPathSampleAtDistance(activePath, distance);
+                const projectedGravity = dot({ x: 0, y: -1 }, surfaceSample.tangent);
+                const acceleration = projectedGravity * gravityPxPerSec2;
+
+                if (Number.isFinite(acceleration)) {
+                  velocity += acceleration * dt;
+                }
+
+                const frictionFactor = Math.exp(-Math.max(0, frictionPerSec) * dt);
+                velocity *= frictionFactor;
+
+                if (Math.abs(velocity) < STATIC_VELOCITY_EPSILON) {
+                  velocity = 0;
+                }
+
+                velocity = clamp(Number.isFinite(velocity) ? velocity : 0, -maxVelocity, maxVelocity);
+                distance = clamp(distance + (velocity * speedScale * dt) / Math.max(1, scale), 0, activePath.totalLength);
+
+                const nextSample = getPathSampleAtDistance(activePath, distance);
+                ballWorld = nextSample.point;
+
+                const atStartEdge = distance <= 0.0001 && velocity < 0;
+                const atEndEdge = distance >= activePath.totalLength - 0.0001 && velocity > 0;
+
+                if (atStartEdge || atEndEdge) {
+                  state = 'air';
+                  airVelocity = {
+                    x: nextSample.tangent.x * (velocity / Math.max(1, scale)),
+                    y: nextSample.tangent.y * (velocity / Math.max(1, scale)),
+                  };
+                }
+              }
             }
           }
         } else {
           const deterministicSpeed = Math.max(0, speedPxPerSec * speedScale);
-          if (state === 'onCurve' && activePath) {
-            distance = clamp(distance + (deterministicSpeed * dt) / Math.max(1, scale), 0, activePath.totalLength);
+          if (activePath) {
+            distance = clamp(distance + (deterministicSpeed * deterministicDt) / Math.max(1, scale), 0, activePath.totalLength);
             velocity = deterministicSpeed;
 
             const sample = getPathSampleAtDistance(activePath, distance);
             ballWorld = sample.point;
-
-            if (distance >= activePath.totalLength - 0.0001) {
-              state = 'air';
-              airVelocity = { x: 0, y: 0 };
-            }
+            state = 'onCurve';
+            airVelocity = { x: 0, y: 0 };
+            activeSegmentIndexRef.current = resolvedSegmentIndex;
           } else {
-            state = 'air';
+            state = 'onCurve';
             velocity = 0;
           }
         }
