@@ -135,10 +135,10 @@ export default function App() {
     [stars]
   );
 
-  const traversalPaths = useMemo(
-    () => buildTraversalPaths(plots[0]?.error ? [] : (plots[0]?.segments ?? [])),
-    [plots]
-  );
+  const traversalPaths = useMemo(() => {
+    const mergedSegments = plots.flatMap((plot) => (plot.error ? [] : plot.segments));
+    return buildTraversalPaths(mergedSegments);
+  }, [plots]);
 
   const collectedStarSet = useMemo(() => new Set(collectedStarIds), [collectedStarIds]);
   const allStarsCollected = stars.length > 0 && collectedStarIds.length >= stars.length;
