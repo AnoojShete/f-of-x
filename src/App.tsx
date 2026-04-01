@@ -9,7 +9,7 @@ import type { GameStar } from './components/GameObjectsOverlay';
 import { compileExpression } from './utils/evaluate';
 import { generateLevel } from './utils/levelGenerator';
 import type { LevelType } from './utils/levelGenerator';
-import { sampleCompiledFunction } from './utils/sample';
+import { sampleCompiledFunctionDetailed } from './utils/sample';
 import type { Vec2 } from './types';
 import type { GraphFunction } from './types';
 import type { GraphPlot } from './types';
@@ -70,7 +70,7 @@ export default function App() {
         return { ...fn, segments: [], error: compiled.error };
       }
 
-      const segments = sampleCompiledFunction(compiled.compiled, {
+      const sampled = sampleCompiledFunctionDetailed(compiled.compiled, {
         xMin,
         xMax,
         stepPx: 2,
@@ -79,7 +79,7 @@ export default function App() {
         maxPixelJump: CANVAS_HEIGHT * 2,
       });
 
-      return { ...fn, segments };
+      return { ...fn, segments: sampled.segments, holes: sampled.holes };
     });
   }, [functions, scale]);
 

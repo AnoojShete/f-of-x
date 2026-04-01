@@ -12,6 +12,7 @@ export type GraphFunction = {
 // A render-ready plot: evaluated + sampled into polyline segments.
 export type GraphPlot = GraphFunction & {
   segments: ReadonlyArray<GraphSegment>;
+  holes?: ReadonlyArray<Vec2>;
   error?: string;
 };
 

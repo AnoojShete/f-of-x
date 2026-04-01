@@ -164,6 +164,31 @@ function drawSegments(
   ctx.stroke();
 }
 
+function drawHoles(
+  ctx: CanvasRenderingContext2D,
+  holes: ReadonlyArray<Vec2>,
+  width: number,
+  height: number,
+  scale: number,
+  cameraCenter: Vec2
+) {
+  if (holes.length === 0) return;
+
+  ctx.save();
+  ctx.fillStyle = '#fff';
+  ctx.lineWidth = 1.5;
+
+  for (const h of holes) {
+    const p = worldToCanvas(h, width, height, scale, cameraCenter);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
 export default function Graph({ width, height, scale, plots, cameraCenter = { x: 0, y: 0 }, children }: GraphProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -201,6 +226,7 @@ export default function Graph({ width, height, scale, plots, cameraCenter = { x:
         ctx.strokeStyle = plot.strokeStyle ?? '#0b5fff';
         ctx.lineWidth = plot.lineWidth ?? 2;
         drawSegments(ctx, plot.segments, width, height, scale, cameraCenter);
+        drawHoles(ctx, plot.holes ?? [], width, height, scale, cameraCenter);
         ctx.restore();
       }
     });
