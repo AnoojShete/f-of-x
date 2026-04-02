@@ -38,6 +38,7 @@ export type DeterministicStepParams = {
 
 const STATIC_VELOCITY_EPSILON = 0.01;
 const MIN_ATTACH_NORMAL_Y = 0.15;
+const EDGE_EPSILON_RATIO = 0.001;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -51,6 +52,10 @@ function normalize(v: Vec2): Vec2 {
   const len = Math.hypot(v.x, v.y);
   if (!(len > 1e-12) || !Number.isFinite(len)) return { x: 0, y: 1 };
   return { x: v.x / len, y: v.y / len };
+}
+
+function getEdgeEpsilon(pathLength: number, scale: number): number {
+  return Math.max(pathLength * EDGE_EPSILON_RATIO, Math.max(1, scale) / 500);
 }
 
 export function stepPhysicsMode(params: PhysicsStepParams): BallPhysicsState {
@@ -112,15 +117,33 @@ export function stepPhysicsMode(params: PhysicsStepParams): BallPhysicsState {
     const hasProximityContact = !!proximityCollision && !!hit && hit.distanceWorld <= contactThresholdWorld;
 
     let hasSupportingSurface = false;
+    let hasAttachDirection = true;
     if (hit) {
       const tangent = normalize(hit.tangent);
       const n1 = { x: -tangent.y, y: tangent.x };
       const n2 = { x: tangent.y, y: -tangent.x };
       const upNormal = n1.y >= n2.y ? n1 : n2;
       hasSupportingSurface = upNormal.y >= MIN_ATTACH_NORMAL_Y;
+
+      const edgeEpsilon = getEdgeEpsilon(collision.path.totalLength, scale);
+      const hitAtStartEdge = hit.arcDistance <= edgeEpsilon;
+      const hitAtEndEdge = hit.arcDistance >= collision.path.totalLength - edgeEpsilon;
+      const tangentSpeedWorld = dot(nextAirVelocity, tangent);
+      if ((hitAtEndEdge && tangentSpeedWorld > STATIC_VELOCITY_EPSILON / Math.max(1, scale)) ||
+        (hitAtStartEdge && tangentSpeedWorld < -STATIC_VELOCITY_EPSILON / Math.max(1, scale))) {
+        hasAttachDirection = false;
+      }
+
+      if (!sweepCollision && (hitAtStartEdge || hitAtEndEdge)) {
+        const movingIntoPathFromEnd = hitAtEndEdge && tangentSpeedWorld < -STATIC_VELOCITY_EPSILON / Math.max(1, scale);
+        const movingIntoPathFromStart = hitAtStartEdge && tangentSpeedWorld > STATIC_VELOCITY_EPSILON / Math.max(1, scale);
+        if (!movingIntoPathFromEnd && !movingIntoPathFromStart) {
+          hasAttachDirection = false;
+        }
+      }
     }
 
-    if (canAttachFromSpawnRules && hasSupportingSurface && hit && (hasSweepContact || hasProximityContact)) {
+    if (canAttachFromSpawnRules && hasSupportingSurface && hasAttachDirection && hit && (hasSweepContact || hasProximityContact)) {
       nextMotionState = 'onCurve';
       nextDistance = hit.arcDistance;
       const tangent = normalize(hit.tangent);
@@ -167,13 +190,16 @@ export function stepPhysicsMode(params: PhysicsStepParams): BallPhysicsState {
       }
 
       nextVelocity = clamp(Number.isFinite(nextVelocity) ? nextVelocity : 0, -maxVelocity, maxVelocity);
-      nextDistance = clamp(nextDistance + (nextVelocity * speedScale * dt) / Math.max(1, scale), 0, activePath.totalLength);
+      const proposedDistance = nextDistance + (nextVelocity * speedScale * dt) / Math.max(1, scale);
+      const overshotDirection = proposedDistance < 0 ? -1 : (proposedDistance > activePath.totalLength ? 1 : 0);
+      nextDistance = clamp(proposedDistance, 0, activePath.totalLength);
 
       const nextSample = getPathSampleAtDistance(activePath, nextDistance);
       nextBallWorld = nextSample.point;
 
-      const atStartEdge = nextDistance <= 0.0001 && nextVelocity < 0;
-      const atEndEdge = nextDistance >= activePath.totalLength - 0.0001 && nextVelocity > 0;
+      const edgeEpsilon = getEdgeEpsilon(activePath.totalLength, scale);
+      const atStartEdge = nextDistance <= edgeEpsilon && overshotDirection < 0;
+      const atEndEdge = nextDistance >= activePath.totalLength - edgeEpsilon && overshotDirection > 0;
 
       if (atStartEdge || atEndEdge) {
         const nextCollision = findClosestCurveCollision(paths, nextBallWorld);
@@ -191,8 +217,9 @@ export function stepPhysicsMode(params: PhysicsStepParams): BallPhysicsState {
           const isSamePath = nextCollision.pathIndex === nextActiveSegmentIndex;
           const nearCollisionEdge =
             !!collisionPath &&
-            (nextCollision.hit.arcDistance <= 0.0001 || nextCollision.hit.arcDistance >= collisionPath.totalLength - 0.0001);
+            (nextCollision.hit.arcDistance <= edgeEpsilon || nextCollision.hit.arcDistance >= collisionPath.totalLength - edgeEpsilon);
           if (isSamePath && nearCollisionEdge) {
+            // Avoid self-snapping at terminal points; switch to air instead.
             canSnapToNextPath = false;
           }
         }

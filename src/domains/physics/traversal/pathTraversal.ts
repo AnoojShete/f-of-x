@@ -152,6 +152,20 @@ export function getTangentFromNeighbors(path: PathSample, distance: number): Vec
   const span = d1 - d0;
   const t = span > 0 ? (safeDistance - d0) / span : 0;
 
+   // At exact path boundaries, prefer direct segment tangent to avoid degenerate neighbor pairs.
+  const atStartBoundary = i === 0 && t <= 1e-6;
+  const atEndBoundary = i1 === count - 1 && t >= 1 - 1e-6;
+  if (atStartBoundary || atEndBoundary) {
+    const a = path.worldPoints[i]!;
+    const b = path.worldPoints[i1]!;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    if (len > 1e-8 && Number.isFinite(len)) {
+      return { x: dx / len, y: dy / len };
+    }
+  }
+
   const anchorIndex = t < 0.5 ? i : i1;
   const prevIndex = Math.max(0, anchorIndex - 1);
   const nextIndex = Math.min(count - 1, anchorIndex + 1);

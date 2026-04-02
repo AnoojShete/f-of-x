@@ -38,7 +38,7 @@ const MIN_VALID_SEGMENT_POINTS = 2;
 const MIN_VALID_SEGMENT_LENGTH_WORLD = 1e-3;
 const ADAPTIVE_MAX_STEP_WORLD = 0.02;
 const ADAPTIVE_MIN_STEP_WORLD = 0.002;
-const DISCONTINUITY_PROBE_T_VALUES = [0.25, 0.5, 0.75] as const;
+const DISCONTINUITY_PROBE_T_VALUES = [0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875] as const;
 
 function isValidSamplePoint(p: Vec2, maxWorldAbsY: number): boolean {
   return Number.isFinite(p.x) && Number.isFinite(p.y) && Math.abs(p.y) <= maxWorldAbsY;
@@ -62,9 +62,10 @@ function hasDiscontinuityBetween(
   // Large opposite-sign values over a tiny x-span are usually asymptotic behavior.
   const largeOppositeSignEndpoints =
     prev.y * next.y < 0 &&
-    Math.abs(prev.y) > maxWorldDyJump &&
-    Math.abs(next.y) > maxWorldDyJump &&
-    dx <= 0.25;
+    Math.abs(prev.y) > maxWorldDyJump * 2 &&
+    Math.abs(next.y) > maxWorldDyJump * 2 &&
+    dx <= 0.25 &&
+    endpointDy > maxWorldDyJump * 4;
   if (largeOppositeSignEndpoints) return true;
 
   const probeYs: number[] = [];
@@ -85,7 +86,7 @@ function hasDiscontinuityBetween(
     Math.abs(probeYs[2]! - probeYs[1]!) +
     Math.abs(next.y - probeYs[2]!);
 
-  return pathVariation > endpointDy * 4 + maxWorldDyJump;
+  return pathVariation > endpointDy * 6 + maxWorldDyJump * 2;
 }
 
 function pushPoint(segments: Vec2[][], p: Vec2) {
@@ -140,6 +141,7 @@ export function sampleCompiledFunctionDetailed(compiled: CompiledExpression, opt
   const maxWorldAbsY = Math.min(opts.maxAbsYUnits, opts.maxWorldAbsY ?? DEFAULT_MAX_WORLD_ABS_Y);
   const maxWorldDyJump = opts.maxWorldDyJump ?? DEFAULT_MAX_WORLD_DY_JUMP;
   const maxAbsSlope = opts.maxAbsSlope ?? DEFAULT_MAX_ABS_SLOPE;
+  const effectiveMaxAbsSlope = Math.max(maxAbsSlope, 3 / Math.max(1e-6, configuredMaxStep));
 
   const segments: Vec2[][] = [];
   const holes: Vec2[] = [];
@@ -159,8 +161,9 @@ export function sampleCompiledFunctionDetailed(compiled: CompiledExpression, opt
   };
 
   let x = opts.xMin;
-  while (dir > 0 ? x <= opts.xMax : x >= opts.xMax) {
-    const result = evaluateCompiledAt(compiled, x, { maxAbsValue: opts.maxAbsYUnits });
+  while (dir > 0 ? x <= opts.xMax + 1e-12 : x >= opts.xMax - 1e-12) {
+    const sampleX = dir > 0 ? Math.min(x, opts.xMax) : Math.max(x, opts.xMax);
+    const result = evaluateCompiledAt(compiled, sampleX, { maxAbsValue: opts.maxAbsYUnits });
     const isInvalidResult = !result.ok;
     if (isInvalidResult) {
       prev = undefined;
@@ -171,7 +174,7 @@ export function sampleCompiledFunctionDetailed(compiled: CompiledExpression, opt
         prev = undefined;
         startNewSegment(segments);
       } else {
-        const p: Vec2 = { x, y };
+        const p: Vec2 = { x: sampleX, y };
         if (!isValidSamplePoint(p, maxWorldAbsY)) {
           prev = undefined;
           startNewSegment(segments);
@@ -186,7 +189,7 @@ export function sampleCompiledFunctionDetailed(compiled: CompiledExpression, opt
             // Prevent vertical connectors for step-like jumps (e.g. floor/ceil) at the same x.
             const isSameXJump = dx <= SAME_X_EPSILON && dy > SAME_X_JUMP_THRESHOLD;
 
-            const isDiscontinuityCandidate = isSameXJump || dy > maxWorldDyJump || slope > maxAbsSlope;
+            const isDiscontinuityCandidate = isSameXJump || dy > maxWorldDyJump || slope > effectiveMaxAbsSlope;
             if (isDiscontinuityCandidate) {
               const shouldSplit = isSameXJump || hasDiscontinuityBetween(compiled, prev, p, opts.maxAbsYUnits, maxWorldAbsY, maxWorldDyJump);
 
@@ -199,7 +202,7 @@ export function sampleCompiledFunctionDetailed(compiled: CompiledExpression, opt
                 startNewSegment(segments);
 
                 // Avoid immediate reattachment on asymptote-edge samples.
-                if (dy > maxWorldDyJump || slope > maxAbsSlope) {
+                if (dy > maxWorldDyJump || slope > effectiveMaxAbsSlope) {
                   skipCurrentPoint = true;
                 }
               }
@@ -221,10 +224,10 @@ export function sampleCompiledFunctionDetailed(compiled: CompiledExpression, opt
       }
     }
 
-    const adaptiveStep = getAdaptiveStep(x);
-    const remaining = Math.abs(opts.xMax - x);
+    const adaptiveStep = getAdaptiveStep(sampleX);
+    const remaining = Math.abs(opts.xMax - sampleX);
     if (remaining <= 1e-12) break;
-    x += Math.min(adaptiveStep, remaining) * dir;
+    x = sampleX + Math.min(adaptiveStep, remaining) * dir;
   }
 
   // Keep only physically meaningful continuous geometry.

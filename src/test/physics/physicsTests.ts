@@ -2,7 +2,7 @@
 import { writeFileSync } from 'fs';
 import { compileExpression } from '../../shared/math/evaluate';
 import { sampleCompiledFunctionDetailed } from '../../domains/graph/sampling/sampleFunction';
-import { buildTraversalPaths, chooseActiveSegmentIndex, findClosestDistanceByX, computeInitialVelocity } from '../../domains/physics/traversal/pathTraversal';
+import { buildTraversalPaths, chooseActiveSegmentIndex, findClosestDistanceByX, computeInitialVelocity, getTangentFromNeighbors } from '../../domains/physics/traversal/pathTraversal';
 import { stepPhysicsMode, type BallPhysicsState } from '../../domains/physics/motion/stepPhysics';
 import type { Vec2 } from '../../shared/types';
 
@@ -327,6 +327,112 @@ function testOneOverXBranchSplitSampling(): TestResult {
   return { name: '1/x -> branch split sampling', passed: true };
 }
 
+function testLinearBoundarySamplingCoverage(): TestResult {
+  const compiled = compileExpression('-x-10');
+  if (!compiled.ok) {
+    return { name: '-x-10 -> boundary sampling coverage', passed: false, reason: compiled.error };
+  }
+
+  const sampled = sampleCompiledFunctionDetailed(compiled.compiled, {
+    xMin: X_MIN,
+    xMax: X_MAX,
+    stepWorld: STEP_WORLD,
+    maxAbsYUnits: MAX_ABS_Y,
+  });
+
+  const points = sampled.segments.flatMap((segment) => segment);
+  if (points.length === 0) {
+    return { name: '-x-10 -> boundary sampling coverage', passed: false, reason: 'no sampled points' };
+  }
+
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  for (const p of points) {
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+  }
+
+  const eps = 0.02;
+  if (minX > X_MIN + eps || maxX < X_MAX - eps) {
+    return {
+      name: '-x-10 -> boundary sampling coverage',
+      passed: false,
+      reason: `sampled x-range [${minX.toFixed(3)}, ${maxX.toFixed(3)}] expected [${X_MIN}, ${X_MAX}]`,
+    };
+  }
+
+  return { name: '-x-10 -> boundary sampling coverage', passed: true };
+}
+
+function testLinearTailNoEndpointStick(): TestResult {
+  const built = buildPaths(['-x-10']);
+  if (built.compileErrors.length > 0) {
+    return { name: '-x-10 -> no endpoint sticking', passed: false, reason: built.compileErrors.join('; ') };
+  }
+
+  const sim = simulate(built.paths, makeOnCurveState(built.paths, { x: -6, y: -4 }, 220), 280);
+  if (!noNonFinitePositions(sim.positions)) {
+    return { name: '-x-10 -> no endpoint sticking', passed: false, reason: 'non-finite positions encountered' };
+  }
+
+  const stuckFrames = sim.positions.filter((p, i, arr) => i > 0 && approx(p.x, arr[i - 1]!.x, 1e-5) && approx(p.y, arr[i - 1]!.y, 1e-5)).length;
+  if (stuckFrames > 20) {
+    return { name: '-x-10 -> no endpoint sticking', passed: false, reason: `stuck for too many frames: ${stuckFrames}` };
+  }
+
+  const reachedTail = sim.positions.some((p) => p.x >= X_MAX - 0.2);
+  if (!reachedTail) {
+    return { name: '-x-10 -> no endpoint sticking', passed: false, reason: 'ball did not reach right tail boundary' };
+  }
+
+  return { name: '-x-10 -> no endpoint sticking', passed: true };
+}
+
+function testSteepLinearContinuousSampling(): TestResult {
+  const built = buildPaths(['40*x-10']);
+  if (built.compileErrors.length > 0) {
+    return { name: '40*x-10 -> steep continuous sampling', passed: false, reason: built.compileErrors.join('; ') };
+  }
+
+  if (built.paths.length !== 1) {
+    return {
+      name: '40*x-10 -> steep continuous sampling',
+      passed: false,
+      reason: `expected 1 continuous path, got ${built.paths.length}`,
+    };
+  }
+
+  return { name: '40*x-10 -> steep continuous sampling', passed: true };
+}
+
+function testEndpointTangentsAreStable(): TestResult {
+  const built = buildPaths(['-x-10']);
+  if (built.compileErrors.length > 0) {
+    return { name: '-x-10 -> stable endpoint tangents', passed: false, reason: built.compileErrors.join('; ') };
+  }
+
+  const path = built.paths[0];
+  if (!path) {
+    return { name: '-x-10 -> stable endpoint tangents', passed: false, reason: 'no traversal path' };
+  }
+
+  const tStart = getTangentFromNeighbors(path, 0);
+  const tEnd = getTangentFromNeighbors(path, path.totalLength);
+  const startLen = Math.hypot(tStart.x, tStart.y);
+  const endLen = Math.hypot(tEnd.x, tEnd.y);
+
+  if (!(startLen > 1e-8 && Number.isFinite(startLen) && endLen > 1e-8 && Number.isFinite(endLen))) {
+    return { name: '-x-10 -> stable endpoint tangents', passed: false, reason: 'degenerate endpoint tangent' };
+  }
+
+  const alignment = tStart.x * tEnd.x + tStart.y * tEnd.y;
+  if (alignment < 0.9) {
+    return { name: '-x-10 -> stable endpoint tangents', passed: false, reason: `endpoint tangent mismatch: ${alignment.toFixed(3)}` };
+  }
+
+  return { name: '-x-10 -> stable endpoint tangents', passed: true };
+}
+
 function runAllTests(): TestResult[] {
   return [
     testOneOverXFall(),
@@ -336,6 +442,10 @@ function runAllTests(): TestResult[] {
     testCubicNoVerticalSticking(),
     testCubicContinuitySampling(),
     testOneOverXBranchSplitSampling(),
+    testLinearBoundarySamplingCoverage(),
+    testLinearTailNoEndpointStick(),
+    testSteepLinearContinuousSampling(),
+    testEndpointTangentsAreStable(),
     testSinSmoothTraversal(),
     testMultiCurveAttachSwitching(),
   ];

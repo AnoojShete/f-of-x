@@ -5,5 +5,9 @@
 [PASS] -(x+pi)^3-2 -> no vertical sticking
 [PASS] x^3 -> continuous sampling
 [PASS] 1/x -> branch split sampling
+[PASS] -x-10 -> boundary sampling coverage
+[PASS] -x-10 -> no endpoint sticking
+[PASS] 40*x-10 -> steep continuous sampling
+[PASS] -x-10 -> stable endpoint tangents
 [PASS] sin(x) -> smooth traversal
 [PASS] multi-curve -> attach switching
