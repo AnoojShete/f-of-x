@@ -3,5 +3,7 @@
 [PASS] log(x) -> no collision near x<=0
 [PASS] (x^2-1)/(x-1) -> hole detection
 [PASS] -(x+pi)^3-2 -> no vertical sticking
+[PASS] x^3 -> continuous sampling
+[PASS] 1/x -> branch split sampling
 [PASS] sin(x) -> smooth traversal
 [PASS] multi-curve -> attach switching

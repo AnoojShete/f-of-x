@@ -37,6 +37,7 @@ export type DeterministicStepParams = {
 };
 
 const STATIC_VELOCITY_EPSILON = 0.01;
+const MIN_ATTACH_NORMAL_Y = 0.15;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -44,6 +45,12 @@ function clamp(value: number, min: number, max: number): number {
 
 function dot(a: Vec2, b: Vec2): number {
   return a.x * b.x + a.y * b.y;
+}
+
+function normalize(v: Vec2): Vec2 {
+  const len = Math.hypot(v.x, v.y);
+  if (!(len > 1e-12) || !Number.isFinite(len)) return { x: 0, y: 1 };
+  return { x: v.x / len, y: v.y / len };
 }
 
 export function stepPhysicsMode(params: PhysicsStepParams): BallPhysicsState {
@@ -76,6 +83,7 @@ export function stepPhysicsMode(params: PhysicsStepParams): BallPhysicsState {
   let nextActiveSegmentIndex = state.activeSegmentIndex;
 
   const gravityWorldPerSec2 = -Math.max(0, gravityPxPerSec2) / Math.max(1, scale);
+  const radiusWorld = radiusPx / Math.max(1, scale);
 
   if (nextMotionState === 'air') {
     nextAirVelocity = {
@@ -103,10 +111,36 @@ export function stepPhysicsMode(params: PhysicsStepParams): BallPhysicsState {
     const hasSweepContact = !!sweepCollision;
     const hasProximityContact = !!proximityCollision && !!hit && hit.distanceWorld <= contactThresholdWorld;
 
-    if (canAttachFromSpawnRules && hit && (hasSweepContact || hasProximityContact)) {
+    let hasSupportingSurface = false;
+    if (hit) {
+      const tangent = normalize(hit.tangent);
+      const n1 = { x: -tangent.y, y: tangent.x };
+      const n2 = { x: tangent.y, y: -tangent.x };
+      const upNormal = n1.y >= n2.y ? n1 : n2;
+      hasSupportingSurface = upNormal.y >= MIN_ATTACH_NORMAL_Y;
+    }
+
+    if (canAttachFromSpawnRules && hasSupportingSurface && hit && (hasSweepContact || hasProximityContact)) {
       nextMotionState = 'onCurve';
       nextDistance = hit.arcDistance;
-      nextBallWorld = hit.point;
+      const tangent = normalize(hit.tangent);
+      let normal: Vec2 = normalize({ x: -tangent.y, y: tangent.x });
+      const toBall = {
+        x: nextBallWorld.x - hit.point.x,
+        y: nextBallWorld.y - hit.point.y,
+      };
+      if (dot(normal, toBall) < 0) {
+        normal = { x: -normal.x, y: -normal.y };
+      }
+
+      const penetration = radiusWorld - hit.distanceWorld;
+      nextBallWorld = { ...hit.point };
+      if (penetration > 0) {
+        nextBallWorld = {
+          x: nextBallWorld.x + normal.x * penetration,
+          y: nextBallWorld.y + normal.y * penetration,
+        };
+      }
       nextActiveSegmentIndex = collision.pathIndex;
 
       const surfaceVelocityFromAir = dot(nextAirVelocity, hit.tangent) * scale;
@@ -142,12 +176,40 @@ export function stepPhysicsMode(params: PhysicsStepParams): BallPhysicsState {
       const atEndEdge = nextDistance >= activePath.totalLength - 0.0001 && nextVelocity > 0;
 
       if (atStartEdge || atEndEdge) {
-        nextMotionState = 'air';
-        nextActiveSegmentIndex = undefined;
-        nextAirVelocity = {
-          x: nextSample.tangent.x * (nextVelocity / Math.max(1, scale)),
-          y: nextSample.tangent.y * (nextVelocity / Math.max(1, scale)),
-        };
+        const nextCollision = findClosestCurveCollision(paths, nextBallWorld);
+        let canSnapToNextPath = !!nextCollision && nextCollision.hit.distanceWorld <= radiusWorld + 1 / Math.max(1, scale);
+
+        if (canSnapToNextPath && nextCollision) {
+          const incomingTangent = normalize(nextSample.tangent);
+          const collisionTangent = normalize(nextCollision.hit.tangent);
+          const tangentAlignment = dot(incomingTangent, collisionTangent);
+          if (tangentAlignment < -0.25) {
+            canSnapToNextPath = false;
+          }
+
+          const collisionPath = paths[nextCollision.pathIndex];
+          const isSamePath = nextCollision.pathIndex === nextActiveSegmentIndex;
+          const nearCollisionEdge =
+            !!collisionPath &&
+            (nextCollision.hit.arcDistance <= 0.0001 || nextCollision.hit.arcDistance >= collisionPath.totalLength - 0.0001);
+          if (isSamePath && nearCollisionEdge) {
+            canSnapToNextPath = false;
+          }
+        }
+
+        if (canSnapToNextPath && nextCollision) {
+          nextDistance = nextCollision.hit.arcDistance;
+          nextBallWorld = nextCollision.hit.point;
+          nextActiveSegmentIndex = nextCollision.pathIndex;
+          nextMotionState = 'onCurve';
+        } else {
+          nextMotionState = 'air';
+          nextActiveSegmentIndex = undefined;
+          nextAirVelocity = {
+            x: nextSample.tangent.x * (nextVelocity / Math.max(1, scale)),
+            y: nextSample.tangent.y * (nextVelocity / Math.max(1, scale)),
+          };
+        }
       }
     }
   }
