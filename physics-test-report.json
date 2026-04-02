@@ -1,7 +1,7 @@
 {
   "summary": {
-    "total": 7,
-    "passed": 7,
+    "total": 9,
+    "passed": 9,
     "failed": 0
   },
   "results": [
@@ -23,6 +23,14 @@
     },
     {
       "name": "-(x+pi)^3-2 -> no vertical sticking",
+      "passed": true
+    },
+    {
+      "name": "x^3 -> continuous sampling",
+      "passed": true
+    },
+    {
+      "name": "1/x -> branch split sampling",
       "passed": true
     },
     {

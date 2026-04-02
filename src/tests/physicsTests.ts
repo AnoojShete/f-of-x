@@ -281,6 +281,52 @@ function testMultiCurveAttachSwitching(): TestResult {
   return { name: 'multi-curve -> attach switching', passed: true };
 }
 
+function testCubicContinuitySampling(): TestResult {
+  const built = buildPaths(['x^3']);
+  if (built.compileErrors.length > 0) {
+    return { name: 'x^3 -> continuous sampling', passed: false, reason: built.compileErrors.join('; ') };
+  }
+
+  const segmentCount = built.paths.length;
+  if (segmentCount !== 1) {
+    return {
+      name: 'x^3 -> continuous sampling',
+      passed: false,
+      reason: `expected 1 continuous path, got ${segmentCount}`,
+    };
+  }
+
+  return { name: 'x^3 -> continuous sampling', passed: true };
+}
+
+function testOneOverXBranchSplitSampling(): TestResult {
+  const built = buildPaths(['1/x']);
+  if (built.compileErrors.length > 0) {
+    return { name: '1/x -> branch split sampling', passed: false, reason: built.compileErrors.join('; ') };
+  }
+
+  if (built.paths.length < 2) {
+    return {
+      name: '1/x -> branch split sampling',
+      passed: false,
+      reason: `expected at least 2 branches, got ${built.paths.length}`,
+    };
+  }
+
+  const hasLeftBranch = built.paths.some((p) => p.worldPoints.some((pt) => pt.x < -0.05));
+  const hasRightBranch = built.paths.some((p) => p.worldPoints.some((pt) => pt.x > 0.05));
+
+  if (!hasLeftBranch || !hasRightBranch) {
+    return {
+      name: '1/x -> branch split sampling',
+      passed: false,
+      reason: 'missing left or right branch around x=0',
+    };
+  }
+
+  return { name: '1/x -> branch split sampling', passed: true };
+}
+
 function runAllTests(): TestResult[] {
   return [
     testOneOverXFall(),
@@ -288,6 +334,8 @@ function runAllTests(): TestResult[] {
     testLogNoCollisionLeftOfDomain(),
     testRemovableHoleDetection(),
     testCubicNoVerticalSticking(),
+    testCubicContinuitySampling(),
+    testOneOverXBranchSplitSampling(),
     testSinSmoothTraversal(),
     testMultiCurveAttachSwitching(),
   ];
