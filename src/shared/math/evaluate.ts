@@ -1,7 +1,8 @@
 import { all, create } from 'mathjs';
 import type { MathNode } from 'mathjs';
 
-const math = create(all);
+// `all` is complete at runtime, but type defs allow undefined in some versions.
+const math = create(all as NonNullable<typeof all>);
 
 const ALLOWED_SYMBOLS = new Set(['x', 'pi', 'e']);
 const ALLOWED_FUNCTIONS = new Set([
