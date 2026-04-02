@@ -1,5 +1,5 @@
-import type { Vec2 } from '../types';
-import type { PathSample } from './traversal';
+import type { Vec2 } from '../../../shared/types';
+import type { PathSample } from '../traversal/pathTraversal';
 
 export type CurveHit = {
   point: Vec2;

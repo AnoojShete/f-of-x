@@ -1,4 +1,4 @@
-import type { GraphSegment, Vec2 } from '../types';
+import type { GraphSegment, Vec2 } from '../../../shared/types';
 
 export type PathSample = {
   worldPoints: ReadonlyArray<Vec2>;

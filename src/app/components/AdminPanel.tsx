@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import Graph from './Graph';
-import GameObjectsOverlay from './GameObjectsOverlay';
-import type { GraphPlot, Vec2 } from '../types';
-import type { GameStar } from './GameObjectsOverlay';
-import type { LevelRecord } from '../types';
+import Graph from '../../domains/graph/components/GraphCanvas';
+import GameObjectsOverlay from '../../domains/gameplay/components/GameObjectsOverlay';
+import type { GraphPlot, Vec2 } from '../../shared/types';
+import type { GameStar } from '../../domains/gameplay/components/GameObjectsOverlay';
+import type { LevelRecord } from '../../shared/types';
 
 export type AdminPanelProps = {
   width: number;

@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit --pretty false",
     "physics:test:build": "tsc -p tsconfig.physics-tests.json",
     "physics:test:prepare": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});fs.writeFileSync('dist/package.json','{\\\"type\\\":\\\"commonjs\\\"}');\"",
-    "physics:test": "npm run physics:test:build && npm run physics:test:prepare && node dist/tests/physicsTests.js"
+    "physics:test": "npm run physics:test:build && npm run physics:test:prepare && node dist/test/physics/physicsTests.js"
   },
   "dependencies": {
     "mathjs": "^13.2.0",

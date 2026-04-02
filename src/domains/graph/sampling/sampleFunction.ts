@@ -1,6 +1,6 @@
-import type { GraphSegment, Vec2 } from '../types';
-import type { CompiledExpression } from './evaluate';
-import { evaluateCompiledAt } from './evaluate';
+import type { GraphSegment, Vec2 } from '../../../shared/types';
+import type { CompiledExpression } from '../../../shared/math/evaluate';
+import { evaluateCompiledAt } from '../../../shared/math/evaluate';
 
 export type SamplingOptions = {
   xMin: number;

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import type { ReactNode } from 'react';
-import type { GraphPlot, GraphSegment, Vec2 } from '../types';
-import { worldToCanvas } from '../utils/curveGeometry';
+import type { GraphPlot, GraphSegment, Vec2 } from '../../../shared/types';
+import { worldToCanvas } from '../../../shared/geometry/curveGeometry';
 
 export type GraphProps = {
   width: number;

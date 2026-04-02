@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
-import Graph from './components/Graph';
-import BallOverlay from './components/BallOverlay';
+import Graph from '../domains/graph/components/GraphCanvas';
+import BallOverlay from '../domains/gameplay/components/BallOverlay';
 import AdminPanel from './components/AdminPanel';
-import GameObjectsOverlay from './components/GameObjectsOverlay';
-import type { GameStar } from './components/GameObjectsOverlay';
-import { stepGameState, type LevelCompleteResult } from './core/game/gameState';
-import { stepDeterministicMode, stepPhysicsMode, type BallPhysicsState } from './physics/motion';
+import GameObjectsOverlay from '../domains/gameplay/components/GameObjectsOverlay';
+import type { GameStar } from '../domains/gameplay/components/GameObjectsOverlay';
+import { stepGameState, type LevelCompleteResult } from '../domains/gameplay/state/stepGameState';
+import { stepDeterministicMode, stepPhysicsMode, type BallPhysicsState } from '../domains/physics/motion/stepPhysics';
 import {
   buildTraversalPaths,
   chooseActiveSegmentIndex,
@@ -14,16 +14,16 @@ import {
   computeInitialVelocity,
   findClosestDistanceByX,
   getPathSampleAtDistance,
-} from './physics/traversal';
-import { compileExpression } from './utils/evaluate';
-import { generateLevel } from './utils/levelGenerator';
-import type { LevelType } from './utils/levelGenerator';
-import { sampleCompiledFunctionDetailed } from './utils/sample';
-import type { Vec2 } from './types';
-import type { GraphFunction } from './types';
-import type { GraphPlot } from './types';
-import type { LevelRecord } from './types';
-import type { Star } from './utils/collision';
+} from '../domains/physics/traversal/pathTraversal';
+import { compileExpression } from '../shared/math/evaluate';
+import { generateLevel } from '../domains/levels/generation/levelGenerator';
+import type { LevelType } from '../domains/levels/generation/levelGenerator';
+import { sampleCompiledFunctionDetailed } from '../domains/graph/sampling/sampleFunction';
+import type { Vec2 } from '../shared/types';
+import type { GraphFunction } from '../shared/types';
+import type { GraphPlot } from '../shared/types';
+import type { LevelRecord } from '../shared/types';
+import type { Star } from '../domains/gameplay/rules/collisionRules';
 
 const CANVAS_WIDTH = 900;
 const CANVAS_HEIGHT = 520;
