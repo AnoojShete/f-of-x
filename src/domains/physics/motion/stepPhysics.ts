@@ -1,6 +1,6 @@
-import type { Vec2 } from '../types';
-import { findClosestCurveCollision, findEarliestSweepCollision } from './collision';
-import { getPathSampleAtDistance, type PathSample } from './traversal';
+import type { Vec2 } from '../../../shared/types';
+import { findClosestCurveCollision, findEarliestSweepCollision } from '../collision/findCurveCollision';
+import { getPathSampleAtDistance, type PathSample } from '../traversal/pathTraversal';
 
 export type MotionState = 'air' | 'onCurve';
 

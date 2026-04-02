@@ -1,10 +1,10 @@
 /// <reference types="node" />
 import { writeFileSync } from 'fs';
-import { compileExpression } from '../utils/evaluate';
-import { sampleCompiledFunctionDetailed } from '../utils/sample';
-import { buildTraversalPaths, chooseActiveSegmentIndex, findClosestDistanceByX, computeInitialVelocity } from '../physics/traversal';
-import { stepPhysicsMode, type BallPhysicsState } from '../physics/motion';
-import type { Vec2 } from '../types';
+import { compileExpression } from '../../shared/math/evaluate';
+import { sampleCompiledFunctionDetailed } from '../../domains/graph/sampling/sampleFunction';
+import { buildTraversalPaths, chooseActiveSegmentIndex, findClosestDistanceByX, computeInitialVelocity } from '../../domains/physics/traversal/pathTraversal';
+import { stepPhysicsMode, type BallPhysicsState } from '../../domains/physics/motion/stepPhysics';
+import type { Vec2 } from '../../shared/types';
 
 type TestResult = {
   name: string;

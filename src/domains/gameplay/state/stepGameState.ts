@@ -1,6 +1,6 @@
-import type { Vec2 } from '../../types';
-import { checkGoalCollision, collectStars } from '../../utils/collision';
-import type { Star } from '../../utils/collision';
+import type { Vec2 } from '../../../shared/types';
+import { checkGoalCollision, collectStars } from '../rules/collisionRules';
+import type { Star } from '../rules/collisionRules';
 
 export type LevelCompleteResult = {
   success: true;

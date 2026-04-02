@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
-import type { Vec2 } from '../types';
-import { worldToCanvas } from '../utils/curveGeometry';
+import type { Vec2 } from '../../../shared/types';
+import { worldToCanvas } from '../../../shared/geometry/curveGeometry';
 
 export type BallOverlayProps = {
   width: number;
