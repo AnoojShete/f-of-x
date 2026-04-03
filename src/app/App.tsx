@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent } from 'react';
 import Graph from '../domains/graph/components/GraphCanvas';
 import BallOverlay from '../domains/gameplay/components/BallOverlay';
 import AdminPanel from './components/AdminPanel';
@@ -36,8 +35,11 @@ const PHYSICS_MAX_SUBSTEPS = 10;
 const PHYSICS_SUBSTEP_TARGET_SEC = 1 / 240;
 const SAMPLE_STEP_WORLD = 0.02;
 const SAMPLE_MAX_ABS_Y_WORLD = 1e3;
+const PHYSICS_SAMPLE_X_MIN = -240;
+const PHYSICS_SAMPLE_X_MAX = 240;
 const MIN_SCALE = 12;
 const MAX_SCALE = 280;
+const CAMERA_FOLLOW_MARGIN_RATIO = 0.32;
 const SAMPLE_OVERSCAN_MULTIPLIER = 2.5;
 const FUNCTION_PALETTE = ['#0b5fff', '#16a34a', '#ef4444', '#f59e0b', '#7c3aed', '#0891b2'] as const;
 const INLINE_DOMAIN_REGEX = /\{\s*x\s*:\s*\[\s*([^,\]]+)\s*,\s*([^\]]+)\s*\]\s*\}\s*$/i;
@@ -285,10 +287,34 @@ export default function App() {
     [stars]
   );
 
+  const physicsPlots = useMemo<GraphPlot[]>(() => {
+    return functions.map((fn) => {
+      const compiled = compileExpression(fn.expression);
+      if (!compiled.ok) {
+        return { ...fn, segments: [], error: compiled.error };
+      }
+
+      const sampledXMin = fn.domainMin == null ? PHYSICS_SAMPLE_X_MIN : Math.max(PHYSICS_SAMPLE_X_MIN, fn.domainMin);
+      const sampledXMax = fn.domainMax == null ? PHYSICS_SAMPLE_X_MAX : Math.min(PHYSICS_SAMPLE_X_MAX, fn.domainMax);
+      if (!(sampledXMax > sampledXMin)) {
+        return { ...fn, segments: [], holes: [] };
+      }
+
+      const sampled = sampleCompiledFunctionDetailed(compiled.compiled, {
+        xMin: sampledXMin,
+        xMax: sampledXMax,
+        stepWorld: SAMPLE_STEP_WORLD,
+        maxAbsYUnits: SAMPLE_MAX_ABS_Y_WORLD,
+      });
+
+      return { ...fn, segments: sampled.segments, holes: sampled.holes };
+    });
+  }, [functions]);
+
   const traversalPaths = useMemo(() => {
-    const mergedSegments = plots.flatMap((plot) => (plot.error ? [] : plot.segments));
+    const mergedSegments = physicsPlots.flatMap((plot) => (plot.error ? [] : plot.segments));
     return buildTraversalPaths(mergedSegments);
-  }, [plots]);
+  }, [physicsPlots]);
 
   const collectedStarSet = useMemo(() => new Set(collectedStarIds), [collectedStarIds]);
   const allStarsCollected = stars.length > 0 && collectedStarIds.length >= stars.length;
@@ -356,17 +382,6 @@ export default function App() {
     setLevelResult(result);
     setGameState('won');
   }, []);
-
-  const handleBallPositionChange = useCallback(
-    (ball: Vec2) => {
-      if (!isCameraFollowEnabled) return;
-      setCameraCenter((prev) => ({
-        x: prev.x + (ball.x - prev.x) * 0.1,
-        y: prev.y + (ball.y - prev.y) * 0.1,
-      }));
-    },
-    [isCameraFollowEnabled]
-  );
 
   const handleGraphPan = useCallback((deltaWorld: Vec2) => {
     setIsCameraFollowEnabled(false);
@@ -494,7 +509,30 @@ export default function App() {
             setBallTangent(sample.tangent);
           }
         }
-        handleBallPositionChange(next.ballWorld);
+        if (isCameraFollowEnabled) {
+          setCameraCenter((prev) => {
+            const smoothed = {
+              x: prev.x + (next.ballWorld.x - prev.x) * 0.12,
+              y: prev.y + (next.ballWorld.y - prev.y) * 0.12,
+            };
+
+            // Keep the ball inside a safe viewport margin even during fast movement.
+            const halfVisibleX = CANVAS_WIDTH / 2 / Math.max(1e-6, scale);
+            const halfVisibleY = CANVAS_HEIGHT / 2 / Math.max(1e-6, scale);
+            const marginX = halfVisibleX * CAMERA_FOLLOW_MARGIN_RATIO;
+            const marginY = halfVisibleY * CAMERA_FOLLOW_MARGIN_RATIO;
+            const maxBallOffsetX = Math.max(0, halfVisibleX - marginX);
+            const maxBallOffsetY = Math.max(0, halfVisibleY - marginY);
+
+            const dx = next.ballWorld.x - smoothed.x;
+            const dy = next.ballWorld.y - smoothed.y;
+
+            return {
+              x: Math.abs(dx) <= maxBallOffsetX ? smoothed.x : next.ballWorld.x - Math.sign(dx) * maxBallOffsetX,
+              y: Math.abs(dy) <= maxBallOffsetY ? smoothed.y : next.ballWorld.y - Math.sign(dy) * maxBallOffsetY,
+            };
+          });
+        }
 
         const gameStep = stepGameState({
           ballPosition: next.ballWorld,
@@ -533,7 +571,7 @@ export default function App() {
     physicsSettings,
     collisionStars,
     goalForCollision,
-    handleBallPositionChange,
+    isCameraFollowEnabled,
     handleLevelComplete,
   ]);
 
