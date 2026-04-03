@@ -41,6 +41,11 @@ coverage/
 # Cache
 .cache/
 .parcel-cache/
+.vite/
+
+# Physics test artifacts
+physics-test-log.txt
+physics-test-report.json
 
 # Misc
 *.local
