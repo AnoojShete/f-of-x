@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef } from 'react';
-import type { ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { PointerEvent as ReactPointerEvent, ReactNode, WheelEvent as ReactWheelEvent } from 'react';
 import type { GraphPlot, GraphSegment, Vec2 } from '../../../shared/types';
 import { worldToCanvas } from '../../../shared/geometry/curveGeometry';
 
@@ -9,6 +9,8 @@ export type GraphProps = {
   scale: number; // pixels per unit
   plots: ReadonlyArray<GraphPlot>;
   cameraCenter?: Vec2;
+  onPan?: (deltaWorld: Vec2) => void;
+  onZoom?: (zoomFactor: number, pivotCanvas: Vec2) => void;
   children?: ReactNode;
 };
 
@@ -189,8 +191,24 @@ function drawHoles(
   ctx.restore();
 }
 
-export default function Graph({ width, height, scale, plots, cameraCenter = { x: 0, y: 0 }, children }: GraphProps) {
+export default function Graph({
+  width,
+  height,
+  scale,
+  plots,
+  cameraCenter = { x: 0, y: 0 },
+  onPan,
+  onZoom,
+  children,
+}: GraphProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStateRef = useRef<Readonly<{ isDragging: boolean; pointerId?: number; x: number; y: number }>>({
+    isDragging: false,
+    x: 0,
+    y: 0,
+  });
 
   const firstError = useMemo(() => {
     for (const plot of plots) {
@@ -234,6 +252,64 @@ export default function Graph({ width, height, scale, plots, cameraCenter = { x:
     return () => cancelAnimationFrame(raf);
   }, [width, height, scale, plots, cameraCenter]);
 
+  const toCanvasPoint = (clientX: number, clientY: number): Vec2 | undefined => {
+    const container = containerRef.current;
+    if (!container) return undefined;
+
+    const rect = container.getBoundingClientRect();
+    return {
+      x: clientX - rect.left,
+      y: clientY - rect.top,
+    };
+  };
+
+  const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!onPan) return;
+    dragStateRef.current = {
+      isDragging: true,
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+    };
+    setIsDragging(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!onPan) return;
+    const drag = dragStateRef.current;
+    if (!drag.isDragging || drag.pointerId !== event.pointerId) return;
+
+    const dxPx = event.clientX - drag.x;
+    const dyPx = event.clientY - drag.y;
+    dragStateRef.current = {
+      ...drag,
+      x: event.clientX,
+      y: event.clientY,
+    };
+
+    if (dxPx === 0 && dyPx === 0) return;
+    onPan({ x: -dxPx / Math.max(1e-6, scale), y: dyPx / Math.max(1e-6, scale) });
+  };
+
+  const endPointerDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragStateRef.current;
+    if (!drag.isDragging || drag.pointerId !== event.pointerId) return;
+    dragStateRef.current = { isDragging: false, x: 0, y: 0 };
+    setIsDragging(false);
+    event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  const handleWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    if (!onZoom) return;
+    event.preventDefault();
+    const pivot = toCanvasPoint(event.clientX, event.clientY);
+    if (!pivot) return;
+
+    const zoomFactor = Math.min(1.8, Math.max(0.5, Math.exp(-event.deltaY * 0.0015)));
+    onZoom(zoomFactor, pivot);
+  };
+
   return (
     <div style={{ display: 'grid', gap: 8 }}>
       {firstError ? (
@@ -251,6 +327,12 @@ export default function Graph({ width, height, scale, plots, cameraCenter = { x:
       ) : null}
 
       <div
+        ref={containerRef}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={endPointerDrag}
+        onPointerCancel={endPointerDrag}
+        onWheel={handleWheel}
         style={{
           position: 'relative',
           width,
@@ -258,6 +340,8 @@ export default function Graph({ width, height, scale, plots, cameraCenter = { x:
           border: '1px solid rgba(0,0,0,0.15)',
           borderRadius: 6,
           overflow: 'hidden',
+          touchAction: 'none',
+          cursor: onPan ? (isDragging ? 'grabbing' : 'grab') : 'default',
         }}
       >
         <canvas

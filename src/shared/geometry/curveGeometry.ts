@@ -13,6 +13,19 @@ export function worldToCanvas(
   };
 }
 
+export function canvasToWorld(
+  p: Vec2,
+  width: number,
+  height: number,
+  scale: number,
+  cameraCenter: Vec2 = { x: 0, y: 0 }
+): Vec2 {
+  return {
+    x: cameraCenter.x + (p.x - width / 2) / Math.max(1e-6, scale),
+    y: cameraCenter.y - (p.y - height / 2) / Math.max(1e-6, scale),
+  };
+}
+
 export function normalize(v: Vec2): Vec2 {
   const len = Math.hypot(v.x, v.y);
   if (!(len > 1e-8) || !Number.isFinite(len)) return { x: 1, y: 0 };

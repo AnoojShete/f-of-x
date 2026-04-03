@@ -5,6 +5,8 @@ export type GraphSegment = ReadonlyArray<Vec2>;
 export type GraphFunction = {
   id: string;
   expression: string;
+  domainMin?: number;
+  domainMax?: number;
   strokeStyle?: string;
   lineWidth?: number;
 };

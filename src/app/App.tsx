@@ -16,6 +16,7 @@ import {
   getPathSampleAtDistance,
 } from '../domains/physics/traversal/pathTraversal';
 import { compileExpression } from '../shared/math/evaluate';
+import { canvasToWorld } from '../shared/geometry/curveGeometry';
 import { generateLevel } from '../domains/levels/generation/levelGenerator';
 import type { LevelType } from '../domains/levels/generation/levelGenerator';
 import { sampleCompiledFunctionDetailed } from '../domains/graph/sampling/sampleFunction';
@@ -35,6 +36,11 @@ const PHYSICS_MAX_SUBSTEPS = 10;
 const PHYSICS_SUBSTEP_TARGET_SEC = 1 / 240;
 const SAMPLE_STEP_WORLD = 0.02;
 const SAMPLE_MAX_ABS_Y_WORLD = 1e3;
+const MIN_SCALE = 12;
+const MAX_SCALE = 280;
+const SAMPLE_OVERSCAN_MULTIPLIER = 2.5;
+const FUNCTION_PALETTE = ['#0b5fff', '#16a34a', '#ef4444', '#f59e0b', '#7c3aed', '#0891b2'] as const;
+const INLINE_DOMAIN_REGEX = /\{\s*x\s*:\s*\[\s*([^,\]]+)\s*,\s*([^\]]+)\s*\]\s*\}\s*$/i;
 
 type GameState = 'idle' | 'playing' | 'won';
 type PhysicsSettings = {
@@ -44,9 +50,92 @@ type PhysicsSettings = {
   speedMultiplier: number;
 };
 
+type FunctionInputRow = {
+  id: string;
+  expression: string;
+  domainMinText: string;
+  domainMaxText: string;
+};
+
+type ParsedDomainExpression = {
+  expression: string;
+  inlineDomainMin: number | undefined;
+  inlineDomainMax: number | undefined;
+  inlineDomainError?: string;
+};
+
+function parseDomainValue(value: string): { ok: true; value: number | undefined } | { ok: false; error: string } {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return { ok: true, value: undefined };
+
+  const num = Number(trimmed);
+  if (!Number.isFinite(num)) {
+    return { ok: false, error: `Domain value "${trimmed}" is not a valid number.` };
+  }
+
+  return { ok: true, value: num };
+}
+
+function normalizeDomainBounds(minValue?: number, maxValue?: number): { min?: number; max?: number } {
+  if (minValue != null && maxValue != null && minValue > maxValue) {
+    return { min: maxValue, max: minValue };
+  }
+
+  const normalized: { min?: number; max?: number } = {};
+  if (minValue != null) normalized.min = minValue;
+  if (maxValue != null) normalized.max = maxValue;
+  return normalized;
+}
+
+function parseExpressionWithInlineDomain(rawExpression: string): ParsedDomainExpression {
+  const trimmed = rawExpression.trim();
+  const match = trimmed.match(INLINE_DOMAIN_REGEX);
+  if (!match) {
+    return { expression: trimmed, inlineDomainMin: undefined, inlineDomainMax: undefined };
+  }
+
+  const [, minText, maxText] = match;
+  const minResult = parseDomainValue(minText ?? '');
+  const maxResult = parseDomainValue(maxText ?? '');
+
+  if (!minResult.ok || !maxResult.ok || minResult.value == null || maxResult.value == null) {
+    return {
+      expression: trimmed.replace(INLINE_DOMAIN_REGEX, '').trim(),
+      inlineDomainMin: undefined,
+      inlineDomainMax: undefined,
+      inlineDomainError: 'Inline domain must be numeric and use format {x:[min,max]}.',
+    };
+  }
+
+  const normalized = normalizeDomainBounds(minResult.value, maxResult.value);
+  return {
+    expression: trimmed.replace(INLINE_DOMAIN_REGEX, '').trim(),
+    inlineDomainMin: normalized.min,
+    inlineDomainMax: normalized.max,
+  };
+}
+
+function createInitialFunctionRows(solution: string): FunctionInputRow[] {
+  const lines = solution
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  if (lines.length === 0) {
+    return [{ id: 'f-1', expression: '', domainMinText: '', domainMaxText: '' }];
+  }
+
+  return lines.map((line, index) => ({
+    id: `f-${index + 1}`,
+    expression: line,
+    domainMinText: '',
+    domainMaxText: '',
+  }));
+}
+
 export default function App() {
   const level = useMemo(() => generateLevel(ACTIVE_LEVEL_TYPE), []);
-  const [functionsText, setFunctionsText] = useState<string>(level.solution);
+  const [functionRows, setFunctionRows] = useState<FunctionInputRow[]>(() => createInitialFunctionRows(level.solution));
   const [scale, setScale] = useState<number>(60); // pixels per unit
   const [isPhysicsEnabled, setIsPhysicsEnabled] = useState<boolean>(true);
   const [isCameraFollowEnabled, setIsCameraFollowEnabled] = useState<boolean>(false);
@@ -65,6 +154,7 @@ export default function App() {
   const [ballPosition, setBallPosition] = useState<Vec2>(level.start);
   const [ballTangent, setBallTangent] = useState<Vec2>({ x: 1, y: 0 });
   const [isBallOnCurve, setIsBallOnCurve] = useState<boolean>(false);
+  const [ballRotationRad, setBallRotationRad] = useState<number>(0);
 
   const physicsStateRef = useRef<BallPhysicsState>({
     previousBallWorld: level.start,
@@ -80,25 +170,72 @@ export default function App() {
   const runCompletedRef = useRef<boolean>(false);
   const collectedIdsRef = useRef<Set<string>>(new Set());
   const goalReachedRef = useRef<boolean>(false);
+  const functionRowCounterRef = useRef<number>(functionRows.length + 1);
+
+  const functionRowErrors = useMemo(() => {
+    const errors: Record<string, string> = {};
+
+    for (const row of functionRows) {
+      const parsed = parseExpressionWithInlineDomain(row.expression);
+      if (parsed.inlineDomainError) {
+        errors[row.id] = parsed.inlineDomainError;
+        continue;
+      }
+
+      const minResult = parseDomainValue(row.domainMinText);
+      if (!minResult.ok) {
+        errors[row.id] = minResult.error;
+        continue;
+      }
+
+      const maxResult = parseDomainValue(row.domainMaxText);
+      if (!maxResult.ok) {
+        errors[row.id] = maxResult.error;
+      }
+    }
+
+    return errors;
+  }, [functionRows]);
 
   const functions = useMemo<GraphFunction[]>(() => {
-    const palette = ['#0b5fff', '#16a34a', '#ef4444', '#f59e0b', '#7c3aed', '#0891b2'];
-    const lines = functionsText
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
+    const out: GraphFunction[] = [];
 
-    return lines.map((line, index) => ({
-      id: `f-${index + 1}`,
-      expression: line,
-      strokeStyle: palette[index % palette.length]!,
-      lineWidth: 2,
-    }));
-  }, [functionsText]);
+    for (let index = 0; index < functionRows.length; index++) {
+      const row = functionRows[index]!;
+      if (functionRowErrors[row.id]) continue;
+
+      const parsed = parseExpressionWithInlineDomain(row.expression);
+      const expression = parsed.expression.trim();
+      if (expression.length === 0) continue;
+
+      const minResult = parseDomainValue(row.domainMinText);
+      const maxResult = parseDomainValue(row.domainMaxText);
+      const domainMinFromField = minResult.ok ? minResult.value : undefined;
+      const domainMaxFromField = maxResult.ok ? maxResult.value : undefined;
+
+      const normalized = normalizeDomainBounds(
+        domainMinFromField ?? parsed.inlineDomainMin,
+        domainMaxFromField ?? parsed.inlineDomainMax
+      );
+
+      out.push({
+        id: row.id,
+        expression,
+        ...(normalized.min != null ? { domainMin: normalized.min } : {}),
+        ...(normalized.max != null ? { domainMax: normalized.max } : {}),
+        strokeStyle: FUNCTION_PALETTE[index % FUNCTION_PALETTE.length]!,
+        lineWidth: 2,
+      });
+    }
+
+    return out;
+  }, [functionRows, functionRowErrors]);
 
   const plots = useMemo<GraphPlot[]>(() => {
-    const xMin = -CANVAS_WIDTH / 2 / scale;
-    const xMax = CANVAS_WIDTH / 2 / scale;
+    const visibleHalfSpan = CANVAS_WIDTH / 2 / scale;
+    const overscan = visibleHalfSpan * SAMPLE_OVERSCAN_MULTIPLIER;
+    const xMin = cameraCenter.x - visibleHalfSpan - overscan;
+    const xMax = cameraCenter.x + visibleHalfSpan + overscan;
 
     return functions.map((fn) => {
       const compiled = compileExpression(fn.expression);
@@ -106,9 +243,15 @@ export default function App() {
         return { ...fn, segments: [], error: compiled.error };
       }
 
+      const sampledXMin = fn.domainMin == null ? xMin : Math.max(xMin, fn.domainMin);
+      const sampledXMax = fn.domainMax == null ? xMax : Math.min(xMax, fn.domainMax);
+      if (!(sampledXMax > sampledXMin)) {
+        return { ...fn, segments: [], holes: [] };
+      }
+
       const sampled = sampleCompiledFunctionDetailed(compiled.compiled, {
-        xMin,
-        xMax,
+        xMin: sampledXMin,
+        xMax: sampledXMax,
         stepWorld: SAMPLE_STEP_WORLD,
         maxAbsYUnits: SAMPLE_MAX_ABS_Y_WORLD,
         maxPixelJump: CANVAS_HEIGHT * 2,
@@ -116,7 +259,7 @@ export default function App() {
 
       return { ...fn, segments: sampled.segments, holes: sampled.holes };
     });
-  }, [functions, scale]);
+  }, [functions, scale, cameraCenter]);
 
   const startPoint = level.start;
   const goal = level.goal;
@@ -155,7 +298,27 @@ export default function App() {
     setBallPosition(startPoint);
     setIsBallOnCurve(false);
     setBallTangent({ x: 1, y: 0 });
+    setBallRotationRad(0);
   }, [startPoint]);
+
+  const addFunctionRow = useCallback(() => {
+    const nextId = `f-${functionRowCounterRef.current}`;
+    functionRowCounterRef.current += 1;
+    setFunctionRows((prev) => [...prev, { id: nextId, expression: '', domainMinText: '', domainMaxText: '' }]);
+  }, []);
+
+  const removeFunctionRow = useCallback((rowId: string) => {
+    setFunctionRows((prev) => {
+      if (prev.length <= 1) {
+        return [{ ...prev[0]!, expression: '', domainMinText: '', domainMaxText: '' }];
+      }
+      return prev.filter((row) => row.id !== rowId);
+    });
+  }, []);
+
+  const updateFunctionRow = useCallback((rowId: string, patch: Partial<FunctionInputRow>) => {
+    setFunctionRows((prev) => prev.map((row) => (row.id === rowId ? { ...row, ...patch } : row)));
+  }, []);
 
   const startGame = useCallback(() => {
     setCollectedStarIds([]);
@@ -166,6 +329,7 @@ export default function App() {
     goalReachedRef.current = false;
     runCompletedRef.current = false;
     lastTimeRef.current = undefined;
+    setBallRotationRad(0);
     setResetToken((v) => v + 1);
     setGameState('playing');
   }, [resetBallToLevelStart]);
@@ -179,6 +343,7 @@ export default function App() {
     goalReachedRef.current = false;
     runCompletedRef.current = false;
     lastTimeRef.current = undefined;
+    setBallRotationRad(0);
     setResetToken((v) => v + 1);
     setGameState('idle');
   }, [resetBallToLevelStart]);
@@ -201,6 +366,36 @@ export default function App() {
       }));
     },
     [isCameraFollowEnabled]
+  );
+
+  const handleGraphPan = useCallback((deltaWorld: Vec2) => {
+    setIsCameraFollowEnabled(false);
+    setCameraCenter((prev) => ({
+      x: prev.x + deltaWorld.x,
+      y: prev.y + deltaWorld.y,
+    }));
+  }, []);
+
+  const handleGraphZoom = useCallback(
+    (zoomFactor: number, pivotCanvas: Vec2) => {
+      setIsCameraFollowEnabled(false);
+      setScale((prevScale) => {
+        const nextScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, prevScale * zoomFactor));
+        if (Math.abs(nextScale - prevScale) < 1e-9) return prevScale;
+
+        setCameraCenter((prevCenter) => {
+          const worldAtPivotBefore = canvasToWorld(pivotCanvas, CANVAS_WIDTH, CANVAS_HEIGHT, prevScale, prevCenter);
+          const worldAtPivotAfter = canvasToWorld(pivotCanvas, CANVAS_WIDTH, CANVAS_HEIGHT, nextScale, prevCenter);
+          return {
+            x: prevCenter.x + (worldAtPivotBefore.x - worldAtPivotAfter.x),
+            y: prevCenter.y + (worldAtPivotBefore.y - worldAtPivotAfter.y),
+          };
+        });
+
+        return nextScale;
+      });
+    },
+    []
   );
 
   useEffect(() => {
@@ -276,6 +471,18 @@ export default function App() {
           });
         }
 
+        let rolledDistanceWorld = 0;
+        if (next.motionState === 'onCurve' && current.motionState === 'onCurve' && next.activeSegmentIndex === current.activeSegmentIndex) {
+          rolledDistanceWorld = next.distance - current.distance;
+        } else if (next.motionState === 'onCurve') {
+          rolledDistanceWorld = (next.velocity * speedScale * dt) / Math.max(1, scale);
+        }
+
+        if (rolledDistanceWorld !== 0) {
+          const deltaRotation = (rolledDistanceWorld * scale) / Math.max(1e-6, BALL_RADIUS_PX);
+          setBallRotationRad((prev) => prev + deltaRotation);
+        }
+
         physicsStateRef.current = next;
         setBallPosition(next.ballWorld);
         const onCurve = next.motionState === 'onCurve';
@@ -334,81 +541,141 @@ export default function App() {
     <div style={{ padding: 16, display: 'grid', gap: 12 }}>
       <h1 style={{ margin: 0, fontSize: 18 }}>f(x) engine (Phase 1)</h1>
 
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <label style={{ display: 'grid', gap: 8, minWidth: 360 }}>
-          <span>f(x) =</span>
-          <textarea
-            value={functionsText}
-            onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFunctionsText(e.target.value)}
-            spellCheck={false}
-            rows={4}
-            style={{ width: 360, padding: '6px 8px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}
-            placeholder={'One function per line\n2*x+3\nsin(x)\n0.5*x^2'}
-          />
-        </label>
-
-        <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span>Scale</span>
-          <input
-            type="range"
-            min={10}
-            max={140}
-            value={scale}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setScale(Number(e.target.value))}
-          />
-          <span style={{ width: 56 }}>{scale} px/unit</span>
-        </label>
-
-        <button
-          type="button"
-          onClick={() => setIsPhysicsEnabled((v) => !v)}
-          style={{ padding: '6px 10px' }}
-        >
-          Physics: {isPhysicsEnabled ? 'ON' : 'OFF'}
-        </button>
-
-        <button
-          type="button"
-          onClick={() => {
-            setIsCameraFollowEnabled((v) => {
-              const next = !v;
-              if (!next) setCameraCenter({ x: 0, y: 0 });
-              return next;
-            });
+      <div style={{ display: 'grid', gap: 12 }}>
+        <div
+          style={{
+            border: '1px solid rgba(0,0,0,0.15)',
+            borderRadius: 8,
+            padding: 10,
+            display: 'grid',
+            gap: 8,
+            maxWidth: 760,
           }}
-          style={{ padding: '6px 10px' }}
         >
-          Camera Follow: {isCameraFollowEnabled ? 'ON' : 'OFF'}
-        </button>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <strong>Functions</strong>
+            <button type="button" onClick={addFunctionRow} style={{ padding: '4px 8px' }}>
+              + Add function
+            </button>
+          </div>
 
-        <button
-          type="button"
-          onClick={() => setIsDebugPanelOpen((v) => !v)}
-          style={{ padding: '6px 10px' }}
-        >
-          {isDebugPanelOpen ? 'Hide' : 'Show'} Debug
-        </button>
+          {functionRows.map((row, index) => {
+            const color = FUNCTION_PALETTE[index % FUNCTION_PALETTE.length];
+            const rowError = functionRowErrors[row.id];
+            return (
+              <div
+                key={row.id}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '26px minmax(200px, 1fr) 110px 110px auto',
+                  gap: 8,
+                  alignItems: 'center',
+                }}
+              >
+                <span style={{ color, fontWeight: 700, textAlign: 'center' }}>{index + 1}</span>
+                <input
+                  value={row.expression}
+                  onChange={(e) => updateFunctionRow(row.id, { expression: e.target.value })}
+                  spellCheck={false}
+                  placeholder="f(x), example: sin(x) or x^2 {x:[-3,3]}"
+                  style={{ padding: '6px 8px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}
+                />
+                <input
+                  value={row.domainMinText}
+                  onChange={(e) => updateFunctionRow(row.id, { domainMinText: e.target.value })}
+                  placeholder="domain min"
+                  style={{ padding: '6px 8px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}
+                />
+                <input
+                  value={row.domainMaxText}
+                  onChange={(e) => updateFunctionRow(row.id, { domainMaxText: e.target.value })}
+                  placeholder="domain max"
+                  style={{ padding: '6px 8px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}
+                />
+                <button
+                  type="button"
+                  onClick={() => removeFunctionRow(row.id)}
+                  title="Remove function"
+                  style={{ padding: '6px 10px' }}
+                >
+                  Remove
+                </button>
+                {rowError ? (
+                  <div style={{ gridColumn: '2 / span 4', fontSize: 12, color: '#b91c1c' }}>{rowError}</div>
+                ) : null}
+              </div>
+            );
+          })}
 
-        <button
-          type="button"
-          onClick={startGame}
-          disabled={gameState === 'playing'}
-          style={{ padding: '6px 10px' }}
-        >
-          Play
-        </button>
+          <div style={{ fontSize: 12, opacity: 0.75 }}>
+            Domain supports fields or inline syntax like <code>x^2 {'{x:[-2,2]}'}</code>.
+          </div>
+        </div>
 
-        <button
-          type="button"
-          onClick={restartGame}
-          style={{ padding: '6px 10px' }}
-        >
-          Restart
-        </button>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span>Scale</span>
+            <input
+              type="range"
+              min={MIN_SCALE}
+              max={MAX_SCALE}
+              value={scale}
+              onChange={(e) => setScale(Number(e.target.value))}
+            />
+            <span style={{ width: 56 }}>{scale} px/unit</span>
+          </label>
 
-        <span style={{ fontSize: 13, opacity: 0.85 }}>
-          State: {gameState}
-        </span>
+          <button
+            type="button"
+            onClick={() => setIsPhysicsEnabled((v) => !v)}
+            style={{ padding: '6px 10px' }}
+          >
+            Physics: {isPhysicsEnabled ? 'ON' : 'OFF'}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setIsCameraFollowEnabled((v) => {
+                const next = !v;
+                if (!next) setCameraCenter({ x: 0, y: 0 });
+                return next;
+              });
+            }}
+            style={{ padding: '6px 10px' }}
+          >
+            Camera Follow: {isCameraFollowEnabled ? 'ON' : 'OFF'}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setIsDebugPanelOpen((v) => !v)}
+            style={{ padding: '6px 10px' }}
+          >
+            {isDebugPanelOpen ? 'Hide' : 'Show'} Debug
+          </button>
+
+          <button
+            type="button"
+            onClick={startGame}
+            disabled={gameState === 'playing'}
+            style={{ padding: '6px 10px' }}
+          >
+            Play
+          </button>
+
+          <button
+            type="button"
+            onClick={restartGame}
+            style={{ padding: '6px 10px' }}
+          >
+            Restart
+          </button>
+
+          <span style={{ fontSize: 13, opacity: 0.85 }}>
+            State: {gameState}
+          </span>
+        </div>
       </div>
 
       {isDebugPanelOpen ? (
@@ -496,7 +763,26 @@ export default function App() {
         scale={scale}
         plots={plots}
         cameraCenter={cameraCenter}
+        onPan={handleGraphPan}
+        onZoom={handleGraphZoom}
       >
+        <div
+          style={{
+            position: 'absolute',
+            top: 10,
+            left: 10,
+            zIndex: 5,
+            fontSize: 12,
+            padding: '6px 8px',
+            borderRadius: 6,
+            background: 'rgba(255,255,255,0.86)',
+            border: '1px solid rgba(0,0,0,0.14)',
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+            pointerEvents: 'none',
+          }}
+        >
+          Ball: ({ballPosition.x.toFixed(3)}, {ballPosition.y.toFixed(3)})
+        </div>
         <GameObjectsOverlay
           width={CANVAS_WIDTH}
           height={CANVAS_HEIGHT}
@@ -516,6 +802,7 @@ export default function App() {
           tangent={ballTangent}
           isOnCurve={isBallOnCurve}
           radiusPx={BALL_RADIUS_PX}
+          rotationRad={ballRotationRad}
         />
       </Graph>
 
